@@ -11,6 +11,10 @@ Based on "https://github.com/realr4an/LeagueOfLegendsMinimapTracker"
 - **Timeline Recording**: Log champion movements over time for post-game analysis
 - **Configurable Settings**: Easily adjust detection parameters through config files
 
+## Demo
+
+![image](https://github.com/user-attachments/assets/112e207c-fa5f-4b39-966e-a466d71a251d)
+
 ## Installation
 
 ### Prerequisites
@@ -127,8 +131,3 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ## Disclaimer
 
 This project is not affiliated with Riot Games and doesn't interact with the League of Legends game client in any way that violates Riot's Terms of Service. It only uses screen capture for image processing and doesn't modify game files or memory.
-
-## Demo
-
-![image](https://github.com/user-attachments/assets/112e207c-fa5f-4b39-966e-a466d71a251d)
-
