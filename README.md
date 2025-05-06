@@ -40,6 +40,8 @@ Based on "https://github.com/realr4an/LeagueOfLegendsMinimapTracker"
 
 The application uses a config file (`config.json` or `config.txt`) to customize its behavior. You can modify the following settings:
 
+Default minimap size is 33 (1920 : 1080)
+
 ```json
 {
     "top": 813,
@@ -118,12 +120,6 @@ The application uses a config file (`config.json` or `config.txt`) to customize 
 
 Contributions are welcome! Please feel free to submit a Pull Request.
 
-1. Fork the repository
-2. Create your feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add some amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
-
 ## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
@@ -131,3 +127,8 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ## Disclaimer
 
 This project is not affiliated with Riot Games and doesn't interact with the League of Legends game client in any way that violates Riot's Terms of Service. It only uses screen capture for image processing and doesn't modify game files or memory.
+
+## Demo
+
+![image](https://github.com/user-attachments/assets/112e207c-fa5f-4b39-966e-a466d71a251d)
+
