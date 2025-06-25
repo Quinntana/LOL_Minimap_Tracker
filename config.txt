@@ -1,0 +1,20 @@
+{
+    "top": 813,
+    "left": 1655,
+    "width": 252,
+    "height": 252,
+    "ssim_threshold": 0.3,
+    "circle_radius_min": 12,
+    "circle_radius_max": 40,
+    "update_interval_ms": 100,
+    "detection_timeout_seconds": 4.0,
+    "log_level": "INFO",
+    "hotkeys": {
+        "save_timeline": "ctrl+s",
+        "quit": "ctrl+d",
+        "toggle_arrows": "ctrl+a",
+        "pause": "ctrl+p",
+        "toggle_last_seen": "ctrl+l",
+        "toggle_timeline_logging": "ctrl+t"
+    }
+}
