@@ -1,0 +1,13 @@
+__pycache__/
+*.py[cod]
+.venv-build/
+build/
+dist/
+.coverage
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+logs/
+data/champion_images/
+data/timeline.csv

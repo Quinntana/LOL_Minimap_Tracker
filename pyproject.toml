@@ -1,0 +1,75 @@
+[build-system]
+requires = ["setuptools>=75", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lol-minimap-tracker"
+version = "1.0.0"
+description = "Private research overlay for League of Legends minimap tracking"
+readme = "README.md"
+requires-python = ">=3.11"
+license = {file = "LICENSE"}
+dependencies = [
+    "PyQt5>=5.15.11,<6",
+    "opencv-python>=4.10,<5",
+    "mss>=9,<11",
+    "keyboard>=0.13.5,<0.14",
+    "numpy>=2.1,<3",
+    "scikit-image>=0.25,<0.27",
+    "requests>=2.31,<3",
+    "Pillow>=10.4,<13",
+]
+
+[project.optional-dependencies]
+build = ["PyInstaller>=6.12,<7"]
+dev = [
+    "mypy>=1.15,<2",
+    "pytest>=8.3,<10",
+    "pytest-cov>=6,<8",
+    "ruff>=0.11,<1",
+    "types-requests>=2.31",
+]
+plot = ["pandas>=2.2,<4", "matplotlib>=3.9,<4", "seaborn>=0.13,<0.14"]
+
+[project.scripts]
+lol-minimap-tracker = "lol_minimap_tracker.app:run"
+lol-minimap-plot = "lol_minimap_tracker.analysis.__main__:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+lol_minimap_tracker = ["assets/roles/*.svg", "assets/roles/manifest.json"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.mypy]
+python_version = "3.13"
+strict = true
+mypy_path = "src"
+exclude = ["src/lol_minimap_tracker/analysis/"]
+
+[[tool.mypy.overrides]]
+module = ["cv2.*", "keyboard.*", "mss.*", "numpy.*", "PyQt5.*", "skimage.*"]
+ignore_missing_imports = true
+follow_imports = "skip"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-q --cov=lol_minimap_tracker --cov-report=term-missing --cov-fail-under=80"
+
+[tool.coverage.run]
+omit = [
+    "src/lol_minimap_tracker/__main__.py",
+    "src/lol_minimap_tracker/app.py",
+    "src/lol_minimap_tracker/analysis/*",
+]
