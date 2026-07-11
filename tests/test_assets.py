@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from pathlib import Path
 from xml.etree import ElementTree
 
 from lol_minimap_tracker.paths import AppPaths
@@ -18,3 +19,11 @@ def test_role_assets_match_manifest() -> None:
         assert ElementTree.fromstring(content).tag.rsplit("}", 1)[-1] == "svg"
         assert entry["source"].startswith("https://raw.communitydragon.org/")
     assert (asset_dir / "position-unknown.svg").exists()
+
+
+def test_build_script_checks_calibration_and_writes_checksum() -> None:
+    root = Path(__file__).resolve().parents[1]
+    script = (root / "build_exe.ps1").read_text(encoding="utf-8")
+    assert "lol_minimap_tracker.ui.calibration" in script
+    assert "Set-Content -LiteralPath $ChecksumPath" in script
+    assert "LoLMinimapTracker.exe.sha256" not in script

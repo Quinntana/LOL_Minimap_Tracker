@@ -87,8 +87,26 @@ may restrict it. The project does not request elevation and has no installer.
 
 ## Configuration and data
 
-Edit `config.json` beside `main.py` or the portable executable. Legacy JSON stored
-in `config.txt` remains readable but is deprecated.
+On first run, the portable executable creates an editable configuration at
+`%LOCALAPPDATA%\LoLMinimapTracker\config.json`. A `config.json` placed beside the
+executable takes precedence, preserving fully portable setups. Legacy JSON stored
+in `config.txt` remains readable but is deprecated and is never rewritten.
+
+Use `Select minimap area...` from the notification-area menu to calibrate without
+restarting. Drag around the full minimap and release. Detection pauses while the
+selection surface is open, then returns to its previous state. The selected global
+coordinates apply immediately to capture and rendering and are saved atomically.
+
+The primary menu is focused on live play:
+
+- `Direction arrows`: red for current detections and yellow for stale positions.
+- `Last-seen markers`: identity-color rings with faded role icons.
+- `Pause detection`: stops new capture and analysis until resumed.
+- `Select minimap area...`: recalibrates the capture rectangle across all displays.
+
+Timeline recording, configuration access, and the data folder are under `Advanced`.
+Left-clicking the notification-area icon opens the same menu as right-clicking it.
+Arrow, marker, notification, and capture-region preferences persist between runs.
 
 Runtime data is written to `%LOCALAPPDATA%\LoLMinimapTracker`:
 

@@ -138,6 +138,10 @@ def test_pause_and_flush_actions() -> None:
     assert engine.toggle_pause()
     assert engine.get_snapshot().mode is TrackerMode.PAUSED
     assert not engine.toggle_pause()
+    assert engine.set_paused(True)
+    assert engine.is_paused()
+    assert not engine.set_paused(False)
+    assert not engine.is_paused()
     engine.flush_timeline()
     assert timeline.flushed
 

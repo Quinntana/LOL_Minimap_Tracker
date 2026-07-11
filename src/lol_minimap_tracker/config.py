@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import tempfile
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -51,6 +53,9 @@ class TrackerConfig:
     log_level: str = "INFO"
     exclude_overlay_from_capture: bool = True
     enable_global_hotkeys: bool = True
+    show_arrows: bool = True
+    show_last_seen: bool = True
+    show_notifications: bool = True
 
     def to_mapping(self) -> dict[str, Any]:
         data = asdict(self)
@@ -171,6 +176,9 @@ def config_from_mapping(values: dict[str, Any], logger: logging.Logger) -> Track
         log_level=log_level,
         exclude_overlay_from_capture=_boolean(values, "exclude_overlay_from_capture", True, logger),
         enable_global_hotkeys=_boolean(values, "enable_global_hotkeys", True, logger),
+        show_arrows=_boolean(values, "show_arrows", True, logger),
+        show_last_seen=_boolean(values, "show_last_seen", True, logger),
+        show_notifications=_boolean(values, "show_notifications", True, logger),
     )
 
 
@@ -188,3 +196,33 @@ def load_config(path: Path, logger: logging.Logger) -> TrackerConfig:
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         logger.error("Could not load %s: %s; using defaults", path, exc)
         return DEFAULT_CONFIG
+
+
+def save_config(path: Path, config: TrackerConfig, logger: logging.Logger) -> bool:
+    """Atomically persist a complete canonical configuration."""
+    temporary_path: Path | None = None
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload = json.dumps(config.to_mapping(), indent=4) + "\n"
+        descriptor, temporary_name = tempfile.mkstemp(
+            prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
+        )
+        temporary_path = Path(temporary_name)
+        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as stream:
+            stream.write(payload)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary_path, path)
+        return True
+    except OSError as exc:
+        logger.error("Could not save %s: %s", path, exc)
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
+        return False
+
+
+def ensure_config(path: Path, logger: logging.Logger) -> bool:
+    """Create a user-editable default configuration when none exists."""
+    if path.exists():
+        return False
+    return save_config(path, DEFAULT_CONFIG, logger)

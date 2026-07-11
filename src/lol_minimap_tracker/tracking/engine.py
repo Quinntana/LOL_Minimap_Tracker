@@ -388,6 +388,15 @@ class TrackerEngine:
             self._paused = not self._paused
             return self._paused
 
+    def set_paused(self, paused: bool) -> bool:
+        with self._lock:
+            self._paused = paused
+            return self._paused
+
+    def is_paused(self) -> bool:
+        with self._lock:
+            return self._paused
+
     def toggle_timeline_logging(self) -> bool:
         with self._lock:
             self._timeline_enabled = not self._timeline_enabled
