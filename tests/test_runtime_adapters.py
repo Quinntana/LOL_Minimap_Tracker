@@ -38,6 +38,11 @@ def test_mss_frame_source_reuses_and_closes_capture(monkeypatch: Any) -> None:
     frame = source.capture()
     assert frame.shape == (20, 30, 3)
     assert capture.monitor == {"top": 1, "left": 2, "width": 30, "height": 20}
+    updated = CaptureRegion(-20, -30, 40, 50)
+    source.set_region(updated)
+    assert source.region == updated
+    source.capture()
+    assert capture.monitor == {"top": -20, "left": -30, "width": 40, "height": 50}
     source.close()
     assert capture.closed
 
@@ -84,3 +89,29 @@ def test_frozen_paths_prefer_config_json_then_legacy(tmp_path: Path, monkeypatch
     canonical = executable.parent / "config.json"
     canonical.write_text("{}", encoding="utf-8")
     assert AppPaths.discover().config_path == canonical
+
+
+def test_frozen_paths_use_local_appdata_when_portable_config_is_missing(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    executable = tmp_path / "readonly" / "LoLMinimapTracker.exe"
+    executable.parent.mkdir()
+    local = tmp_path / "local"
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "executable", str(executable))
+    monkeypatch.setenv("LOCALAPPDATA", str(local))
+    paths = AppPaths.discover()
+    assert paths.config_path == local / "LoLMinimapTracker" / "config.json"
+    assert paths.config_write_path == paths.config_path
+
+
+def test_legacy_config_writes_to_canonical_sibling(tmp_path: Path, monkeypatch: Any) -> None:
+    executable = tmp_path / "portable" / "LoLMinimapTracker.exe"
+    executable.parent.mkdir()
+    legacy = executable.parent / "config.txt"
+    legacy.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "executable", str(executable))
+    paths = AppPaths.discover()
+    assert paths.config_path == legacy
+    assert paths.config_write_path == legacy.with_name("config.json")

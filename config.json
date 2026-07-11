@@ -23,6 +23,9 @@
     "log_level": "INFO",
     "exclude_overlay_from_capture": true,
     "enable_global_hotkeys": true,
+    "show_arrows": true,
+    "show_last_seen": true,
+    "show_notifications": true,
     "hotkeys": {
         "save_timeline": "ctrl+s",
         "quit": "ctrl+d",

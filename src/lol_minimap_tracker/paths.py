@@ -26,13 +26,24 @@ class AppPaths:
         user_data_dir = local_app_data / "LoLMinimapTracker"
         canonical = app_dir / "config.json"
         legacy = app_dir / "config.txt"
-        config_path = canonical if canonical.exists() or not legacy.exists() else legacy
+        if canonical.exists():
+            config_path = canonical
+        elif legacy.exists():
+            config_path = legacy
+        else:
+            config_path = user_data_dir / "config.json"
         role_asset_dir = Path(str(files("lol_minimap_tracker").joinpath("assets", "roles")))
         return cls(app_dir, user_data_dir, config_path, role_asset_dir)
 
     @property
     def log_dir(self) -> Path:
         return self.user_data_dir / "logs"
+
+    @property
+    def config_write_path(self) -> Path:
+        if self.config_path.name.casefold() == "config.txt":
+            return self.config_path.with_name("config.json")
+        return self.config_path
 
     @property
     def cache_dir(self) -> Path:

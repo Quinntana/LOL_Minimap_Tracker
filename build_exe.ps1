@@ -43,12 +43,15 @@ Copy-Item -LiteralPath (Join-Path $ProjectRoot "config.json") -Destination (Join
 
 $Archive = & $ArchiveViewer -l -r $Executable
 $ArchiveText = $Archive -join [Environment]::NewLine
-foreach ($Required in @("lol_minimap_tracker.app", "QtSvg.pyd", "cv2.pyd", "mss.windows", "skimage.metrics._structural_similarity", "position-top.svg")) {
+foreach ($Required in @("lol_minimap_tracker.app", "lol_minimap_tracker.ui.calibration", "QtSvg.pyd", "cv2.pyd", "mss.windows", "skimage.metrics._structural_similarity", "position-top.svg")) {
     if ($ArchiveText -notmatch [regex]::Escape($Required)) {
         throw "Packaged archive is missing $Required"
     }
 }
 
 $Hash = Get-FileHash -Algorithm SHA256 -LiteralPath $Executable
+$ChecksumPath = "$Executable.sha256"
+Set-Content -LiteralPath $ChecksumPath -Value "$($Hash.Hash) *LoLMinimapTracker.exe" -Encoding ascii
 Write-Output "Built $Executable"
 Write-Output "SHA256 $($Hash.Hash)"
+Write-Output "Checksum $ChecksumPath"

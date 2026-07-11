@@ -2,9 +2,19 @@ from __future__ import annotations
 
 import json
 import logging
+from dataclasses import replace
 from pathlib import Path
+from typing import Any
 
-from lol_minimap_tracker.config import DEFAULT_CONFIG, config_from_mapping, load_config
+import lol_minimap_tracker.config as config_module
+from lol_minimap_tracker.config import (
+    DEFAULT_CONFIG,
+    CaptureRegion,
+    config_from_mapping,
+    ensure_config,
+    load_config,
+    save_config,
+)
 
 
 def test_config_loads_flat_capture_and_nested_hotkeys(tmp_path: Path) -> None:
@@ -38,6 +48,9 @@ def test_config_rejects_invalid_values(caplog: object) -> None:
             "circle_radius_max": 20,
             "log_level": "LOUD",
             "exclude_overlay_from_capture": "false",
+            "show_arrows": 1,
+            "show_last_seen": "yes",
+            "show_notifications": None,
         },
         logging.getLogger("test"),
     )
@@ -64,6 +77,9 @@ def test_config_rejects_invalid_values(caplog: object) -> None:
     assert config.circle_radius_max == DEFAULT_CONFIG.circle_radius_max
     assert config.log_level == "INFO"
     assert config.exclude_overlay_from_capture is True
+    assert config.show_arrows is True
+    assert config.show_last_seen is True
+    assert config.show_notifications is True
 
 
 def test_legacy_json_is_read_without_rewrite(tmp_path: Path, caplog: object) -> None:
@@ -104,3 +120,35 @@ def test_malformed_json_uses_defaults(tmp_path: Path) -> None:
     path = tmp_path / "config.json"
     path.write_text("{broken", encoding="utf-8")
     assert load_config(path, logging.getLogger("test")) == DEFAULT_CONFIG
+
+
+def test_default_config_bootstrap_and_preference_round_trip(tmp_path: Path) -> None:
+    path = tmp_path / "settings" / "config.json"
+    logger = logging.getLogger("test")
+    assert ensure_config(path, logger)
+    assert not ensure_config(path, logger)
+    assert load_config(path, logger) == DEFAULT_CONFIG
+
+    updated = replace(
+        DEFAULT_CONFIG,
+        capture=CaptureRegion(top=-100, left=-1800, width=320, height=280),
+        show_arrows=False,
+        show_last_seen=False,
+        show_notifications=False,
+    )
+    assert save_config(path, updated, logger)
+    assert load_config(path, logger) == updated
+
+
+def test_failed_atomic_save_preserves_existing_config(tmp_path: Path, monkeypatch: Any) -> None:
+    path = tmp_path / "config.json"
+    path.write_text('{"width": 321}', encoding="utf-8")
+    original = path.read_text(encoding="utf-8")
+
+    def fail_replace(_source: object, _destination: object) -> None:
+        raise OSError("read only")
+
+    monkeypatch.setattr(config_module.os, "replace", fail_replace)
+    assert not save_config(path, DEFAULT_CONFIG, logging.getLogger("test"))
+    assert path.read_text(encoding="utf-8") == original
+    assert not list(tmp_path.glob("*.tmp"))

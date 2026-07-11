@@ -9,7 +9,7 @@ from PyQt5.QtCore import QRect, Qt, QTimer
 from PyQt5.QtGui import QColor, QPainter, QPen, QShowEvent
 from PyQt5.QtWidgets import QApplication, QMainWindow
 
-from ..config import TrackerConfig
+from ..config import CaptureRegion, TrackerConfig
 from ..domain.interfaces import DisplayAffinityController
 from ..domain.models import AffinityResult, AffinityStatus, TrackerSnapshot
 from .geometry import marker_layouts, segment_intersects_rect, status_origin
@@ -32,8 +32,9 @@ class TransparentOverlay(QMainWindow):
         self.affinity_controller = affinity_controller
         self.affinity_changed = affinity_changed
         self.snapshot = TrackerSnapshot()
-        self.show_arrows = True
-        self.show_last_seen = True
+        self.capture_region = config.capture
+        self.show_arrows = config.show_arrows
+        self.show_last_seen = config.show_last_seen
         self.affinity_result = AffinityResult(AffinityStatus.FAILED)
         self._affinity_applied = False
         self._virtual_geometry = self._get_virtual_geometry()
@@ -79,12 +80,20 @@ class TransparentOverlay(QMainWindow):
         self.update()
         return self.show_last_seen
 
+    def set_capture_region(self, region: CaptureRegion) -> None:
+        geometry = self._get_virtual_geometry()
+        if geometry != self._virtual_geometry:
+            self._virtual_geometry = geometry
+            self.setGeometry(geometry)
+        self.capture_region = region
+        self.update()
+
     def _map_rect_global(self) -> tuple[int, int, int, int]:
-        region = self.config.capture
+        region = self.capture_region
         return region.left, region.top, region.width, region.height
 
     def _map_rect_local(self) -> QRect:
-        region = self.config.capture
+        region = self.capture_region
         return QRect(
             region.left - self._virtual_geometry.left(),
             region.top - self._virtual_geometry.top(),
@@ -159,7 +168,7 @@ class TransparentOverlay(QMainWindow):
         if not self.show_last_seen or not self._in_map_graphics_safe():
             return
         layouts = marker_layouts(self.snapshot.champions)
-        region = self.config.capture
+        region = self.capture_region
         offset_x = region.left - self._virtual_geometry.left()
         offset_y = region.top - self._virtual_geometry.top()
         for champion in self.snapshot.champions:
