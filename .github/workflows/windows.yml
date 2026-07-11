@@ -1,0 +1,40 @@
+name: Windows validation
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: python -m pip install .[dev]
+      - run: ruff format --check src tests tools main.py
+      - run: ruff check src tests tools main.py
+      - run: mypy src
+      - run: pytest
+
+  package:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: python -m pip install .[build,dev]
+      - run: pyinstaller --clean --noconfirm LoLMinimapTracker.spec
+      - shell: pwsh
+        run: |
+          $archive = pyi-archive_viewer -l -r dist/LoLMinimapTracker.exe
+          $archiveText = $archive -join [Environment]::NewLine
+          foreach ($required in @("lol_minimap_tracker.app", "QtSvg.pyd", "cv2.pyd", "mss.windows", "skimage.metrics._structural_similarity", "position-top.svg")) {
+            if ($archiveText -notmatch [regex]::Escape($required)) { throw "Missing $required" }
+          }

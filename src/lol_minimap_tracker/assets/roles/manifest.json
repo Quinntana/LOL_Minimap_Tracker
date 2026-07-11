@@ -1,0 +1,27 @@
+{
+  "top": {
+    "file": "position-top.svg",
+    "sha256": "9cdaec5ffc26e530bb4a7a1cc9192a7610b25be0f8fd366c3605c1afd360f916",
+    "source": "https://raw.communitydragon.org/latest/plugins/rcp-fe-lol-champ-select/global/default/svg/position-top.svg"
+  },
+  "jungle": {
+    "file": "position-jungle.svg",
+    "sha256": "b5fc0cc5ce9225a85a621216df3e284942bfc49380da4fdf4bf1f4bff428ddda",
+    "source": "https://raw.communitydragon.org/latest/plugins/rcp-fe-lol-champ-select/global/default/svg/position-jungle.svg"
+  },
+  "middle": {
+    "file": "position-middle.svg",
+    "sha256": "df95d266bc4cafd94e25ba7cb49cc3b85f7c31f8a95f9d5e496affffa783c953",
+    "source": "https://raw.communitydragon.org/latest/plugins/rcp-fe-lol-champ-select/global/default/svg/position-middle.svg"
+  },
+  "bottom": {
+    "file": "position-bottom.svg",
+    "sha256": "2ee0de0500e2336ac44227b8040f47f7321f3e5f72cbad740c225633985855b2",
+    "source": "https://raw.communitydragon.org/latest/plugins/rcp-fe-lol-champ-select/global/default/svg/position-bottom.svg"
+  },
+  "utility": {
+    "file": "position-utility.svg",
+    "sha256": "fdbb740a56418806862ad70a49754141e06ab919ffc3a6ba97a0a3b987875e10",
+    "source": "https://raw.communitydragon.org/latest/plugins/rcp-fe-lol-champ-select/global/default/svg/position-utility.svg"
+  }
+}
