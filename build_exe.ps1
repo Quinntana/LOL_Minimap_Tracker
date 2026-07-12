@@ -43,7 +43,7 @@ Copy-Item -LiteralPath (Join-Path $ProjectRoot "config.json") -Destination (Join
 
 $Archive = & $ArchiveViewer -l -r $Executable
 $ArchiveText = $Archive -join [Environment]::NewLine
-foreach ($Required in @("lol_minimap_tracker.app", "lol_minimap_tracker.ui.calibration", "QtSvg.pyd", "cv2.pyd", "mss.windows", "skimage.metrics._structural_similarity", "position-top.svg")) {
+foreach ($Required in @("lol_minimap_tracker.app", "lol_minimap_tracker.ui.calibration", "QtSvg.pyd", "cv2.pyd", "mss.windows", "skimage.metrics._structural_similarity", "windows_capture\windows_capture.pyd", "position-top.svg")) {
     if ($ArchiveText -notmatch [regex]::Escape($Required)) {
         throw "Packaged archive is missing $Required"
     }

@@ -23,7 +23,9 @@ class Capture:
 
     def grab(self, monitor: dict[str, int]) -> np.ndarray[Any, Any]:
         self.monitor = monitor
-        return np.zeros((20, 30, 4), dtype=np.uint8)
+        frame = np.zeros((20, 30, 4), dtype=np.uint8)
+        frame[0, 0] = [7, 11, 223, 255]
+        return frame
 
     def close(self) -> None:
         self.closed = True
@@ -37,6 +39,7 @@ def test_mss_frame_source_reuses_and_closes_capture(monkeypatch: Any) -> None:
     source.start()
     frame = source.capture()
     assert frame.shape == (20, 30, 3)
+    assert frame[0, 0].tolist() == [7, 11, 223]
     assert capture.monitor == {"top": 1, "left": 2, "width": 30, "height": 20}
     updated = CaptureRegion(-20, -30, 40, 50)
     source.set_region(updated)

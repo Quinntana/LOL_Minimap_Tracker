@@ -4,6 +4,7 @@ from lol_minimap_tracker.domain.models import (
     Role,
 )
 from lol_minimap_tracker.ui.geometry import (
+    marker_dot_offsets,
     marker_layouts,
     rectangles_intersect,
     segment_intersects_rect,
@@ -31,7 +32,17 @@ def test_overlapping_markers_are_concentric_oldest_first() -> None:
     layouts = marker_layouts((view("Old", (50, 50), 12), view("New", (54, 53), 5)))
     assert layouts["Old"].radius == 10
     assert layouts["New"].radius == 13
-    assert layouts["Old"].icon_opacity > layouts["New"].icon_opacity
+
+
+def test_coincident_dots_fan_out_deterministically() -> None:
+    offsets = marker_dot_offsets(
+        (
+            view("Zed", (50, 50), 12),
+            view("Alpha", (50, 50), 5),
+            view("Solo", (80, 80), 2),
+        )
+    )
+    assert offsets == {"Alpha": (-3, 0), "Zed": (3, 0), "Solo": (0, 0)}
 
 
 def test_segment_intersection_is_conservative() -> None:

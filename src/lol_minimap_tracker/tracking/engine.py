@@ -23,6 +23,7 @@ from ..domain.models import (
     AnalysisStatus,
     ChampionObservation,
     ChampionView,
+    DetectionDiagnostics,
     DetectionFrame,
     EnemyIdentity,
     RosterMember,
@@ -96,6 +97,7 @@ class TrackerEngine:
         self._ambiguous_rejections = 0
         self._duplicate_rejections = 0
         self._motion_deferrals = 0
+        self._last_detection = DetectionDiagnostics()
         self._next_capture_recovery = 0.0
 
     @staticmethod
@@ -123,6 +125,7 @@ class TrackerEngine:
         self._ambiguous_rejections = 0
         self._duplicate_rejections = 0
         self._motion_deferrals = 0
+        self._last_detection = DetectionDiagnostics()
 
     def poll_roster(self) -> None:
         polled_at = self.clock.monotonic()
@@ -197,7 +200,18 @@ class TrackerEngine:
         api_age = (
             max(0.0, now - self._last_api_success) if self._last_api_success is not None else None
         )
-        if not self._identities or self._last_frame_completed is None:
+        if not self._identities:
+            status = AnalysisStatus.WARMING_UP
+            message = "Waiting for live frames"
+        elif self._last_frame_completed is None and (
+            self._consecutive_failures >= self.config.capture_recovery_failure_count
+        ):
+            status = AnalysisStatus.STALLED
+            message = self._last_error or "Could not start live analysis"
+        elif self._last_frame_completed is None and self._consecutive_failures > 0:
+            status = AnalysisStatus.DEGRADED
+            message = self._last_error or "Waiting for a valid capture"
+        elif self._last_frame_completed is None:
             status = AnalysisStatus.WARMING_UP
             message = "Waiting for live frames"
         elif (
@@ -218,7 +232,14 @@ class TrackerEngine:
             message = self._last_error or self._api_error or "Live analysis delayed"
         else:
             status = AnalysisStatus.HEALTHY
-            message = f"{self._frames_per_second:.1f} FPS, {self._processing_ms:.1f} ms"
+            diagnostics = self._last_detection
+            message = (
+                f"{self._frames_per_second:.1f} FPS, {self._processing_ms:.1f} ms; "
+                f"{diagnostics.accepted}/{diagnostics.circles} matched, "
+                f"{diagnostics.below_threshold} low, {diagnostics.portraits} portraits, "
+                f"best {diagnostics.best_score:.2f} (+{diagnostics.best_margin:.2f})"
+            )
+        diagnostics = self._last_detection
         return RuntimeHealth(
             status=status,
             frames_per_second=self._frames_per_second,
@@ -231,6 +252,12 @@ class TrackerEngine:
             duplicate_rejections=self._duplicate_rejections,
             motion_deferrals=self._motion_deferrals,
             pending_confirmations=len(self._pending),
+            portraits=diagnostics.portraits,
+            detected_circles=diagnostics.circles,
+            accepted_matches=diagnostics.accepted,
+            below_threshold=diagnostics.below_threshold,
+            best_match_score=diagnostics.best_score,
+            best_match_margin=diagnostics.best_margin,
             last_error=self._last_error,
             message=message,
         )
@@ -347,6 +374,7 @@ class TrackerEngine:
             self._last_error = None
             self._ambiguous_rejections += detection.diagnostics.ambiguous
             self._duplicate_rejections += detection.diagnostics.duplicate
+            self._last_detection = detection.diagnostics
 
     def _record_failure(self, phase: str, error: Exception) -> None:
         with self._lock:

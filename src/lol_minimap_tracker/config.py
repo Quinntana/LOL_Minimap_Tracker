@@ -10,6 +10,8 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .domain.models import LastSeenMarkerStyle
+
 
 @dataclass(frozen=True)
 class CaptureRegion:
@@ -50,11 +52,16 @@ class TrackerConfig:
     roster_refresh_interval_seconds: float = 5.0
     roster_missing_grace_polls: int = 3
     local_api_timeout_seconds: float = 1.0
+    capture_backend: str = "league_window"
+    capture_region_space: str = "screen"
+    league_process_name: str = "League of Legends.exe"
+    window_capture_timeout_seconds: float = 1.0
     log_level: str = "INFO"
     exclude_overlay_from_capture: bool = True
     enable_global_hotkeys: bool = True
     show_arrows: bool = True
     show_last_seen: bool = True
+    last_seen_marker_style: LastSeenMarkerStyle = LastSeenMarkerStyle.RING
     show_notifications: bool = True
 
     def to_mapping(self) -> dict[str, Any]:
@@ -135,6 +142,39 @@ def config_from_mapping(values: dict[str, Any], logger: logging.Logger) -> Track
         logger.warning("Invalid log_level=%r; using INFO", log_level)
         log_level = "INFO"
 
+    capture_backend = values.get("capture_backend", "league_window")
+    if not isinstance(capture_backend, str) or capture_backend not in {
+        "league_window",
+        "desktop_mss",
+    }:
+        logger.warning("Invalid capture_backend=%r; using league_window", capture_backend)
+        capture_backend = "league_window"
+    capture_region_space = values.get("capture_region_space", "screen")
+    if not isinstance(capture_region_space, str) or capture_region_space not in {
+        "screen",
+        "client",
+    }:
+        logger.warning("Invalid capture_region_space=%r; using screen", capture_region_space)
+        capture_region_space = "screen"
+    if capture_backend == "desktop_mss" and capture_region_space == "client":
+        logger.warning(
+            "desktop_mss requires screen-space coordinates; keeping league_window backend"
+        )
+        capture_backend = "league_window"
+    league_process_name = values.get("league_process_name", "League of Legends.exe")
+    if not isinstance(league_process_name, str) or not league_process_name.strip():
+        logger.warning("Invalid league_process_name=%r; using default", league_process_name)
+        league_process_name = "League of Legends.exe"
+
+    raw_marker_style = values.get("last_seen_marker_style", LastSeenMarkerStyle.RING.value)
+    try:
+        if not isinstance(raw_marker_style, str):
+            raise ValueError
+        marker_style = LastSeenMarkerStyle(raw_marker_style)
+    except ValueError:
+        logger.warning("Invalid last_seen_marker_style=%r; using ring", raw_marker_style)
+        marker_style = LastSeenMarkerStyle.RING
+
     return TrackerConfig(
         capture=capture,
         hotkeys=hotkeys,
@@ -173,11 +213,18 @@ def config_from_mapping(values: dict[str, Any], logger: logging.Logger) -> Track
         local_api_timeout_seconds=float(
             _number(values, "local_api_timeout_seconds", 1.0, logger, 0.1)
         ),
+        capture_backend=capture_backend,
+        capture_region_space=capture_region_space,
+        league_process_name=league_process_name.strip(),
+        window_capture_timeout_seconds=float(
+            _number(values, "window_capture_timeout_seconds", 1.0, logger, 0.05)
+        ),
         log_level=log_level,
         exclude_overlay_from_capture=_boolean(values, "exclude_overlay_from_capture", True, logger),
         enable_global_hotkeys=_boolean(values, "enable_global_hotkeys", True, logger),
         show_arrows=_boolean(values, "show_arrows", True, logger),
         show_last_seen=_boolean(values, "show_last_seen", True, logger),
+        last_seen_marker_style=marker_style,
         show_notifications=_boolean(values, "show_notifications", True, logger),
     )
 

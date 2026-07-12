@@ -18,6 +18,8 @@ analysis = Analysis(
         "mss",
         "PyQt5.QtSvg",
         "skimage.metrics",
+        "windows_capture",
+        "windows_capture.windows_capture",
     ],
     hookspath=[],
     hooksconfig={},
@@ -48,4 +50,5 @@ exe = EXE(
     upx=True,
     console=False,
     disable_windowed_traceback=False,
+    manifest=str(project_root / "LoLMinimapTracker.manifest"),
 )

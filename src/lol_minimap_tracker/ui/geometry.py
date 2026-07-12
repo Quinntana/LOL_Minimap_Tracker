@@ -8,6 +8,14 @@ from ..domain.models import ChampionView, MarkerLayout
 
 RectTuple = tuple[int, int, int, int]
 
+_DOT_CLUSTER_OFFSETS = {
+    1: ((0, 0),),
+    2: ((-3, 0), (3, 0)),
+    3: ((0, -3), (-3, 3), (3, 3)),
+    4: ((-3, -3), (3, -3), (-3, 3), (3, 3)),
+    5: ((0, 0), (0, -5), (5, 0), (0, 5), (-5, 0)),
+}
+
 
 def rectangles_intersect(first: RectTuple, second: RectTuple) -> bool:
     ax, ay, aw, ah = first
@@ -87,8 +95,35 @@ def marker_layouts(
             result[champion.identity.champion_name] = MarkerLayout(
                 champion_name=champion.identity.champion_name,
                 radius=10 + index * 3,
-                icon_opacity=max(0.15, 0.35 - index * 0.08),
             )
+    return result
+
+
+def marker_dot_offsets(
+    champions: tuple[ChampionView, ...],
+) -> dict[str, tuple[int, int]]:
+    """Fan exact-position collisions into a tiny deterministic color cluster."""
+    groups: dict[tuple[int, int], list[ChampionView]] = {}
+    for champion in champions:
+        if champion.is_current or champion.position is None:
+            continue
+        groups.setdefault(champion.position, []).append(champion)
+
+    result: dict[str, tuple[int, int]] = {}
+    for group in groups.values():
+        group.sort(key=lambda champion: champion.identity.champion_name.casefold())
+        offsets = _DOT_CLUSTER_OFFSETS.get(len(group))
+        if offsets is None:
+            radius = max(5, math.ceil(len(group) * 3 / math.pi))
+            offsets = tuple(
+                (
+                    round(math.cos(2 * math.pi * index / len(group)) * radius),
+                    round(math.sin(2 * math.pi * index / len(group)) * radius),
+                )
+                for index in range(len(group))
+            )
+        for champion, offset in zip(group, offsets, strict=True):
+            result[champion.identity.champion_name] = offset
     return result
 
 

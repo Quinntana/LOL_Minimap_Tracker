@@ -3,16 +3,46 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+import cv2
 import numpy as np
+import pytest
 
 from lol_minimap_tracker.config import TrackerConfig
+from lol_minimap_tracker.domain.identity import EXTENDED_PALETTE, PREFERRED_COLORS
 from lol_minimap_tracker.tracking.detector import OpenCvChampionDetector
 
 
-def test_detector_preserves_original_bgr_thresholds() -> None:
+def test_detector_masks_true_bgr_red_not_blue() -> None:
     detector = OpenCvChampionDetector(TrackerConfig(), logging.getLogger("test"))
-    assert detector.lower_red.tolist() == [100, 0, 0]
-    assert detector.upper_red.tolist() == [255, 100, 100]
+    image = np.zeros((3, 3, 3), dtype=np.uint8)
+    image[0, 0] = [0, 0, 220]
+    image[1, 1] = [220, 0, 0]
+    mask = detector.red_mask(image)
+    assert mask[0, 0] == 255
+    assert mask[1, 1] == 0
+
+
+def test_identity_marker_colors_stay_outside_detector_red_bands() -> None:
+    detector = OpenCvChampionDetector(TrackerConfig(), logging.getLogger("test"))
+    colors = sorted(set(PREFERRED_COLORS.values()) | set(EXTENDED_PALETTE))
+    pixels = [tuple(reversed(bytes.fromhex(color.removeprefix("#")))) for color in colors]
+    image = np.array([pixels], dtype=np.uint8)
+
+    assert not np.any(detector.red_mask(image))
+
+
+def test_detector_finds_a_true_bgr_red_ring() -> None:
+    detector = OpenCvChampionDetector(TrackerConfig(), logging.getLogger("test"))
+    image = np.zeros((120, 120, 3), dtype=np.uint8)
+    cv2.circle(image, (60, 60), 20, (0, 0, 255), 4)
+
+    circles = detector.detect_red_circles(image)
+
+    assert circles is not None
+    x, y, radius = circles[0][0]
+    assert x == pytest.approx(60, abs=2)
+    assert y == pytest.approx(60, abs=2)
+    assert radius == pytest.approx(20, abs=3)
 
 
 def test_ssim_matches_identical_images() -> None:
@@ -40,10 +70,25 @@ def test_process_handles_no_circles_and_a_matched_crop(monkeypatch: Any) -> None
 
     circles = np.array([[[20, 20, 5]]], dtype=np.float32)
     monkeypatch.setattr(detector, "detect_red_circles", lambda _image: circles)
-    monkeypatch.setattr(detector, "find_best_match", lambda _region, _portraits: ("Aatrox", 0.9))
     detection = detector.process(image, portraits)
     assert detection.observations[0].champion_name == "Aatrox"
     assert detection.camera_center == (20, 20)
+    assert detection.diagnostics.portraits == 1
+
+
+def test_matching_ignores_the_outer_circle_ring() -> None:
+    detector = OpenCvChampionDetector(TrackerConfig(), logging.getLogger("test"))
+    portrait = np.zeros((40, 40, 3), dtype=np.uint8)
+    portrait[8:32, 8:32] = np.arange(24 * 24 * 3, dtype=np.uint8).reshape((24, 24, 3))
+    query = portrait.copy()
+    query[:7] = [0, 0, 255]
+    query[-7:] = [0, 0, 255]
+    query[:, :7] = [0, 0, 255]
+    query[:, -7:] = [0, 0, 255]
+
+    name, score = detector.find_best_match(query, {"Aatrox": portrait})
+    assert name == "Aatrox"
+    assert score == 1.0
 
 
 def test_best_match_respects_threshold_and_handles_bad_images() -> None:
@@ -101,6 +146,8 @@ def test_process_enforces_one_detection_per_champion(monkeypatch: Any) -> None:
     assert detection.diagnostics.circles == 2
     assert detection.diagnostics.accepted == 1
     assert detection.diagnostics.duplicate == 1
+    assert detection.diagnostics.best_score == 0.95
+    assert detection.diagnostics.best_margin == pytest.approx(0.55)
 
 
 def test_process_counts_ambiguous_and_below_threshold_candidates(monkeypatch: Any) -> None:
@@ -119,4 +166,21 @@ def test_process_counts_ambiguous_and_below_threshold_candidates(monkeypatch: An
     detection = detector.process(image, {})
     assert not detection.observations
     assert detection.diagnostics.ambiguous == 1
+    assert detection.diagnostics.below_threshold == 1
+    assert detection.diagnostics.best_score == 0.90
+
+
+def test_process_reports_negative_best_score_without_clamping(monkeypatch: Any) -> None:
+    detector = OpenCvChampionDetector(TrackerConfig(), logging.getLogger("test"))
+    image = np.zeros((40, 40, 3), dtype=np.uint8)
+    monkeypatch.setattr(
+        detector,
+        "detect_red_circles",
+        lambda _image: np.array([[[20, 20, 5]]], dtype=np.float32),
+    )
+    monkeypatch.setattr(detector, "score_matches", lambda *_args: [("Aatrox", -0.2)])
+
+    detection = detector.process(image, {})
+
+    assert detection.diagnostics.best_score == -0.2
     assert detection.diagnostics.below_threshold == 1

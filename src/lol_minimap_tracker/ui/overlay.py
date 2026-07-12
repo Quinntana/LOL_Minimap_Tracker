@@ -11,8 +11,13 @@ from PyQt5.QtWidgets import QApplication, QMainWindow
 
 from ..config import CaptureRegion, TrackerConfig
 from ..domain.interfaces import DisplayAffinityController
-from ..domain.models import AffinityResult, AffinityStatus, TrackerSnapshot
-from .geometry import marker_layouts, segment_intersects_rect, status_origin
+from ..domain.models import (
+    AffinityResult,
+    AffinityStatus,
+    LastSeenMarkerStyle,
+    TrackerSnapshot,
+)
+from .geometry import marker_dot_offsets, marker_layouts, segment_intersects_rect, status_origin
 from .role_icons import RoleIconRenderer
 
 
@@ -24,6 +29,8 @@ class TransparentOverlay(QMainWindow):
         icons: RoleIconRenderer,
         affinity_controller: DisplayAffinityController,
         affinity_changed: Callable[[AffinityResult], None],
+        capture_isolated: Callable[[], bool] | None = None,
+        capture_region_provider: Callable[[], CaptureRegion] | None = None,
     ) -> None:
         super().__init__()
         self.snapshot_provider = snapshot_provider
@@ -31,10 +38,13 @@ class TransparentOverlay(QMainWindow):
         self.icons = icons
         self.affinity_controller = affinity_controller
         self.affinity_changed = affinity_changed
+        self.capture_isolated = capture_isolated or (lambda: False)
+        self.capture_region_provider = capture_region_provider
         self.snapshot = TrackerSnapshot()
         self.capture_region = config.capture
         self.show_arrows = config.show_arrows
         self.show_last_seen = config.show_last_seen
+        self.last_seen_marker_style = config.last_seen_marker_style
         self.affinity_result = AffinityResult(AffinityStatus.FAILED)
         self._affinity_applied = False
         self._virtual_geometry = self._get_virtual_geometry()
@@ -67,6 +77,10 @@ class TransparentOverlay(QMainWindow):
             self.affinity_changed(self.affinity_result)
 
     def update_overlay(self) -> None:
+        if self.capture_region_provider is not None:
+            region = self.capture_region_provider()
+            if region != self.capture_region:
+                self.set_capture_region(region)
         self.snapshot = self.snapshot_provider()
         self.update()
 
@@ -79,6 +93,10 @@ class TransparentOverlay(QMainWindow):
         self.show_last_seen = not self.show_last_seen
         self.update()
         return self.show_last_seen
+
+    def set_last_seen_marker_style(self, style: LastSeenMarkerStyle) -> None:
+        self.last_seen_marker_style = style
+        self.update()
 
     def set_capture_region(self, region: CaptureRegion) -> None:
         geometry = self._get_virtual_geometry()
@@ -102,10 +120,7 @@ class TransparentOverlay(QMainWindow):
         )
 
     def _in_map_graphics_safe(self) -> bool:
-        return self.affinity_result.status in {
-            AffinityStatus.ACTIVE,
-            AffinityStatus.DISABLED,
-        }
+        return self.capture_isolated() or self.affinity_result.status is AffinityStatus.ACTIVE
 
     def _draw_status(self, painter: QPainter) -> None:
         screen = (
@@ -165,32 +180,47 @@ class TransparentOverlay(QMainWindow):
             )
 
     def _draw_markers(self, painter: QPainter) -> None:
-        if not self.show_last_seen or not self._in_map_graphics_safe():
+        if not self.show_last_seen:
             return
-        layouts = marker_layouts(self.snapshot.champions)
+        if (
+            self.last_seen_marker_style is LastSeenMarkerStyle.RING
+            and not self._in_map_graphics_safe()
+        ):
+            return
+        layouts = (
+            marker_layouts(self.snapshot.champions)
+            if self.last_seen_marker_style is LastSeenMarkerStyle.RING
+            else {}
+        )
+        dot_offsets = (
+            marker_dot_offsets(self.snapshot.champions)
+            if self.last_seen_marker_style is LastSeenMarkerStyle.DOT
+            else {}
+        )
         region = self.capture_region
         offset_x = region.left - self._virtual_geometry.left()
         offset_y = region.top - self._virtual_geometry.top()
         for champion in self.snapshot.champions:
             if champion.is_current or champion.position is None:
                 continue
-            layout = layouts[champion.identity.champion_name]
             x = offset_x + champion.position[0]
             y = offset_y + champion.position[1]
+            if self.last_seen_marker_style is LastSeenMarkerStyle.DOT:
+                dot_x, dot_y = dot_offsets[champion.identity.champion_name]
+                painter.save()
+                painter.setRenderHint(QPainter.Antialiasing, False)
+                painter.setPen(QPen(QColor(8, 8, 8, 230), 1))
+                painter.setBrush(QColor(champion.identity.color))
+                painter.drawEllipse(QRect(x + dot_x - 2, y + dot_y - 2, 5, 5))
+                painter.restore()
+                continue
+            layout = layouts[champion.identity.champion_name]
             radius = layout.radius
             painter.setBrush(Qt.NoBrush)
             painter.setPen(QPen(QColor(10, 10, 10, 210), 4))
             painter.drawEllipse(x - radius, y - radius, radius * 2, radius * 2)
             painter.setPen(QPen(QColor(champion.identity.color), 2))
             painter.drawEllipse(x - radius, y - radius, radius * 2, radius * 2)
-            icon_size = min(10, max(8, radius - 3))
-            icon = self.icons.render(
-                champion.identity.role_icon,
-                champion.identity.color,
-                icon_size,
-                layout.icon_opacity,
-            )
-            painter.drawPixmap(x - icon_size // 2, y - icon_size // 2, icon)
 
     def paintEvent(self, event: object) -> None:
         del event

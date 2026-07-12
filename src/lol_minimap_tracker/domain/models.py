@@ -50,6 +50,11 @@ class AffinityStatus(StrEnum):
     FAILED = "failed"
 
 
+class LastSeenMarkerStyle(StrEnum):
+    RING = "ring"
+    DOT = "dot"
+
+
 class AnalysisStatus(StrEnum):
     WARMING_UP = "warming_up"
     HEALTHY = "healthy"
@@ -88,11 +93,14 @@ class ChampionObservation:
 
 @dataclass(frozen=True)
 class DetectionDiagnostics:
+    portraits: int = 0
     circles: int = 0
     accepted: int = 0
     below_threshold: int = 0
     ambiguous: int = 0
     duplicate: int = 0
+    best_score: float = 0.0
+    best_margin: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -115,6 +123,12 @@ class RuntimeHealth:
     duplicate_rejections: int = 0
     motion_deferrals: int = 0
     pending_confirmations: int = 0
+    portraits: int = 0
+    detected_circles: int = 0
+    accepted_matches: int = 0
+    below_threshold: int = 0
+    best_match_score: float = 0.0
+    best_match_margin: float = 0.0
     last_error: str | None = None
     message: str = "Waiting for live frames"
 
@@ -148,7 +162,6 @@ class AffinityResult:
 class MarkerLayout:
     champion_name: str
     radius: int
-    icon_opacity: float
 
 
 PortraitMap = Mapping[str, object]

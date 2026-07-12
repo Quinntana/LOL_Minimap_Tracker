@@ -3,13 +3,26 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from typing import cast
 
 from PyQt5.QtCore import QObject, pyqtSignal
 from PyQt5.QtGui import QCursor, QIcon
-from PyQt5.QtWidgets import QAction, QApplication, QMenu, QStyle, QSystemTrayIcon
+from PyQt5.QtWidgets import (
+    QAction,
+    QActionGroup,
+    QApplication,
+    QMenu,
+    QStyle,
+    QSystemTrayIcon,
+)
 
 from ..config import CaptureRegion, TrackerConfig
-from ..domain.models import AffinityResult, TrackerSnapshot
+from ..domain.models import (
+    AffinityResult,
+    AffinityStatus,
+    LastSeenMarkerStyle,
+    TrackerSnapshot,
+)
 
 
 class ActionBridge(QObject):
@@ -35,6 +48,7 @@ class TrayController:
         self.tray = QSystemTrayIcon(tray_icon, app)
         self.tray.setToolTip("LoL Minimap Tracker - waiting")
         self.menu = QMenu()
+        self.menu.setToolTipsVisible(True)
 
         self.status_action = self._add_status("Game: Waiting")
         self.analysis_action = self._add_status("Analysis: Waiting for live frames")
@@ -56,6 +70,26 @@ class TrayController:
             config.show_last_seen,
             dispatch,
         )
+        self.marker_style_menu = cast(QMenu, self.menu.addMenu("Last-seen style"))
+        self.marker_style_menu.setToolTipsVisible(True)
+        self.marker_style_actions: dict[LastSeenMarkerStyle, QAction] = {}
+        self.marker_style_group = QActionGroup(self.marker_style_menu)
+        self.marker_style_group.setExclusive(True)
+        self._add_marker_style(
+            "Hollow ring",
+            LastSeenMarkerStyle.RING,
+            "set_marker_style_ring",
+            "Large identity-color outline. Hidden if desktop capture cannot exclude the overlay.",
+            dispatch,
+        )
+        self._add_marker_style(
+            "Minimal color dot (fallback)",
+            LastSeenMarkerStyle.DOT,
+            "set_marker_style_dot",
+            "Five-pixel identity-color dot. Remains visible if capture exclusion is unavailable.",
+            dispatch,
+        )
+        self.update_marker_style(config.last_seen_marker_style)
         self._add_toggle(self.menu, "Pause detection", "pause", False, dispatch)
 
         self.advanced_menu = self.menu.addMenu("Advanced")
@@ -105,6 +139,23 @@ class TrayController:
         menu.addAction(action)
         self.toggle_actions[name] = action
 
+    def _add_marker_style(
+        self,
+        label: str,
+        style: LastSeenMarkerStyle,
+        action_name: str,
+        tooltip: str,
+        dispatch: Callable[[str], None],
+    ) -> None:
+        action = QAction(label, self.marker_style_menu)
+        action.setCheckable(True)
+        action.setToolTip(tooltip)
+        action.setStatusTip(tooltip)
+        action.triggered.connect(lambda _checked=False, key=action_name: dispatch(key))
+        self.marker_style_group.addAction(action)
+        self.marker_style_menu.addAction(action)
+        self.marker_style_actions[style] = action
+
     @staticmethod
     def _add_command(menu: QMenu, label: str, name: str, dispatch: Callable[[str], None]) -> None:
         action = QAction(label, menu)
@@ -133,6 +184,14 @@ class TrayController:
         if action is not None:
             action.setChecked(checked)
 
+    def update_marker_style(self, style: LastSeenMarkerStyle) -> None:
+        action = self.marker_style_actions.get(style)
+        if action is None:
+            return
+        action.setChecked(True)
+        label = "Minimal dot" if style is LastSeenMarkerStyle.DOT else "Hollow ring"
+        self.marker_style_menu.setTitle(f"Last-seen style: {label}")
+
     def update_region(self, region: CaptureRegion) -> None:
         self.region_action.setText(
             f"Minimap: {region.width} x {region.height} at {region.left}, {region.top}"
@@ -147,5 +206,21 @@ class TrayController:
         self.update_action("pause", snapshot.mode.value == "paused")
         self.update_action("toggle_timeline_logging", snapshot.timeline_logging)
 
-    def update_affinity(self, result: AffinityResult) -> None:
-        self.affinity_action.setText(f"Capture exclusion: {result.status.value}")
+    def update_affinity(self, result: AffinityResult, capture_isolated: bool = False) -> None:
+        if capture_isolated:
+            self.affinity_action.setText("Overlay capture: isolated (League window)")
+            self.affinity_action.setToolTip(
+                "Only the League game window is captured, so overlay graphics are excluded."
+            )
+            return
+        if result.status is AffinityStatus.ACTIVE:
+            self.affinity_action.setText("Capture exclusion: active")
+            self.affinity_action.setToolTip("Desktop capture excludes the overlay window.")
+            return
+        self.affinity_action.setText(
+            f"Capture exclusion: {result.status.value} - dot fallback available"
+        )
+        self.affinity_action.setToolTip(
+            "Hollow rings are hidden to prevent feedback. Select the minimal dot style to "
+            "keep last-seen positions visible."
+        )

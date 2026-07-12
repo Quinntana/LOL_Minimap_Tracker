@@ -4,6 +4,7 @@ import logging
 from typing import Any
 
 import numpy as np
+import pytest
 
 from lol_minimap_tracker.config import TrackerConfig
 from lol_minimap_tracker.domain.models import (
@@ -17,7 +18,7 @@ from lol_minimap_tracker.domain.models import (
     RosterStatus,
     TrackerMode,
 )
-from lol_minimap_tracker.tracking.engine import TrackerEngine
+from lol_minimap_tracker.tracking.engine import FrameProcessingError, TrackerEngine
 
 
 class Clock:
@@ -340,7 +341,16 @@ def test_runtime_health_reports_detector_diagnostics_and_stale_frames() -> None:
         DetectionFrame(
             (),
             None,
-            DetectionDiagnostics(circles=3, ambiguous=2, duplicate=1),
+            DetectionDiagnostics(
+                portraits=5,
+                circles=3,
+                accepted=0,
+                below_threshold=1,
+                ambiguous=2,
+                duplicate=1,
+                best_score=0.27,
+                best_margin=0.01,
+            ),
         )
     )
     engine.poll_roster()
@@ -352,11 +362,41 @@ def test_runtime_health_reports_detector_diagnostics_and_stale_frames() -> None:
     assert healthy.frames_per_second == 10.0
     assert healthy.ambiguous_rejections == 4
     assert healthy.duplicate_rejections == 2
+    assert healthy.portraits == 5
+    assert healthy.detected_circles == 3
+    assert healthy.accepted_matches == 0
+    assert healthy.below_threshold == 1
+    assert healthy.best_match_score == 0.27
+    assert "0/3 matched" in healthy.message
 
     clock.now = 1.2
     assert engine.get_snapshot().health.status is AnalysisStatus.DEGRADED
     clock.now = 3.2
     assert engine.get_snapshot().health.status is AnalysisStatus.STALLED
+
+
+def test_capture_startup_failures_are_visible_before_the_first_frame() -> None:
+    engine, _, _ = make_engine([active()])
+
+    class UnavailableFrames(Frames):
+        def capture(self) -> np.ndarray[Any, Any]:
+            raise OSError("League game window not found")
+
+    engine.frame_source = UnavailableFrames()
+    engine.poll_roster()
+
+    with pytest.raises(FrameProcessingError):
+        engine.process_frame()
+    degraded = engine.get_snapshot().health
+    assert degraded.status is AnalysisStatus.DEGRADED
+    assert "League game window not found" in degraded.message
+
+    for _ in range(2):
+        with pytest.raises(FrameProcessingError):
+            engine.process_frame()
+    stalled = engine.get_snapshot().health
+    assert stalled.status is AnalysisStatus.STALLED
+    assert "League game window not found" in stalled.message
 
 
 def test_repeated_capture_failures_restart_source_and_recover() -> None:

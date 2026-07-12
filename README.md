@@ -17,9 +17,9 @@ Live Client Data API. It does not modify game files or process memory.
 ## Overlay identity
 
 Every enemy receives a stable, colorblind-conscious color for the match. The same
-color is used for the champion name outside the minimap and the hollow last-seen
-ring. The ring contains a faint role icon for Top, Jungle, Mid, Bot, or Support.
-Names and portraits are never drawn over the minimap.
+color is used for the champion name outside the minimap and the selected last-seen
+marker. Missing enemies with a known prior position use either a hollow ring or a
+minimal dot, avoiding stale portraits or labels over the minimap.
 
 Direction arrows keep their original state colors:
 
@@ -33,15 +33,23 @@ portrait matches that do not clear the SSIM threshold or are too close to the
 second-best portrait, and keeps at most one observation per champion per frame.
 The tracker then requires spatially consistent observations across consecutive
 frames before publishing a position. Large coordinate jumps require an additional
-confirming frame, reducing false last-seen markers without changing the original
-BGR mask or red/yellow arrow colors.
+confirming frame, reducing false last-seen markers. Red marker candidates are
+isolated in HSV after the captured BGRA frame is converted to BGR; portrait matching
+uses the icon center so the red rim and minimap background do not dominate SSIM.
 
-The tray reports rolling frame rate, processing time, stale frames, Live Client
-interruptions, and capture/detection failures. Repeated MSS capture failures cause
-a user-level capture restart with backoff; the executable never requests elevation.
+The tray reports rolling frame rate, processing time, portrait count, detected
+circles, accepted matches, stale frames, Live Client interruptions, and
+capture/detection failures. Repeated capture failures cause a user-level capture
+restart with backoff; the executable never requests elevation.
 The confidence, movement, health, and recovery values are configurable in
 `config.json`:
 
+- `capture_backend`: `league_window` (default) or explicit `desktop_mss` fallback.
+- `capture_region_space`: `screen` for legacy/global coordinates or `client` for a
+  region that follows the League window.
+- `league_process_name`: exact game executable used for window discovery.
+- `window_capture_timeout_seconds`: maximum wait for a fresh game-window frame.
+- `last_seen_marker_style`: persisted manual choice of `ring` or `dot`.
 - `ssim_margin`: required separation from the second-best portrait score.
 - `confirmation_frames`: normal consecutive-frame requirement.
 - `confirmation_position_tolerance_pixels`: maximum movement within a confirmation run.
@@ -50,10 +58,20 @@ The confidence, movement, health, and recovery values are configurable in
 - `health_stale_after_seconds`: delayed-frame warning threshold.
 - `capture_recovery_failure_count` and `capture_recovery_backoff_seconds`: MSS recovery.
 
-On Windows 10 version 2004 and newer, the overlay requests
-`WDA_EXCLUDEFROMCAPTURE`, which keeps it visible on the monitor while supported
-capture APIs omit it. This is a best-effort Windows feature, not a security
-guarantee. If affinity cannot be verified, graphics inside the minimap are disabled.
+The default `league_window` backend uses Windows Graphics Capture to target the
+visible window owned by `League of Legends.exe`. Only that game window is captured,
+so the separate overlay window cannot feed back into detection. Window capture
+requires Windows 10 version 1903 or newer. The older composed-desktop MSS backend
+remains available only through the explicit `desktop_mss` setting.
+
+For desktop capture, the overlay requests `WDA_EXCLUDEFROMCAPTURE` on Windows 10
+version 2004 and newer. This is a best-effort Windows feature, not a security
+guarantee; if affinity cannot be verified, larger graphics inside the minimap are
+disabled.
+Hollow last-seen rings remain disabled in that state, but the user can explicitly
+select the five-pixel identity-color dot fallback. The tracker never changes marker
+style automatically. Dot colors stay outside the detector's red hue bands and the
+dot is well below the normal circle-radius threshold, minimizing recapture feedback.
 See [Microsoft's display-affinity documentation](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setwindowdisplayaffinity).
 
 ## Development
@@ -100,13 +118,16 @@ coordinates apply immediately to capture and rendering and are saved atomically.
 The primary menu is focused on live play:
 
 - `Direction arrows`: red for current detections and yellow for stale positions.
-- `Last-seen markers`: identity-color rings with faded role icons.
+- `Last-seen markers`: shows or hides the last confirmed positions of missing enemies.
+- `Last-seen style`: manually selects hollow identity-color rings or minimal
+  identity-color dots. Ring is the default; dot is the desktop-capture fallback.
 - `Pause detection`: stops new capture and analysis until resumed.
 - `Select minimap area...`: recalibrates the capture rectangle across all displays.
 
 Timeline recording, configuration access, and the data folder are under `Advanced`.
 Left-clicking the notification-area icon opens the same menu as right-clicking it.
-Arrow, marker, notification, and capture-region preferences persist between runs.
+Arrow, marker visibility/style, notification, and capture-region preferences persist
+between runs.
 
 Runtime data is written to `%LOCALAPPDATA%\LoLMinimapTracker`:
 

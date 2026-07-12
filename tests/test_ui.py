@@ -13,6 +13,7 @@ from lol_minimap_tracker.domain.models import (
     AffinityStatus,
     ChampionView,
     EnemyIdentity,
+    LastSeenMarkerStyle,
     Role,
     RosterStatus,
     TrackerMode,
@@ -63,24 +64,87 @@ def test_role_icons_render_and_cache(qapp: object) -> None:
 def test_overlay_renders_safe_and_fallback_modes(qapp: Any) -> None:
     current = snapshot()
     changed: list[AffinityResult] = []
+    isolated = {"value": False}
+    region = CaptureRegion(200, 300, 100, 100)
     overlay = TransparentOverlay(
         lambda: current,
-        TrackerConfig(capture=CaptureRegion(200, 300, 100, 100)),
+        TrackerConfig(capture=region),
         RoleIconRenderer(AppPaths.discover().role_asset_dir),
         Affinity(),
         changed.append,
+        lambda: isolated["value"],
     )
     overlay.snapshot = current
     overlay.show()
     qapp.processEvents()
     assert changed[-1].status is AffinityStatus.ACTIVE
     overlay.affinity_result = AffinityResult(AffinityStatus.ACTIVE)
+    overlay.show_arrows = False
     image = QImage(overlay.size(), QImage.Format_ARGB32_Premultiplied)
     image.fill(0)
     overlay.render(image)
     assert not image.isNull()
+    marker_x = region.left - overlay._virtual_geometry.left() + 70
+    marker_y = region.top - overlay._virtual_geometry.top() + 80
+    assert image.pixelColor(marker_x, marker_y).alpha() == 0
+    ring = image.pixelColor(marker_x + 10, marker_y)
+    assert ring.alpha() > 0
+    assert ring.green() > ring.red()
+
+    overlay.affinity_result = AffinityResult(AffinityStatus.DISABLED)
+    unsafe = QImage(overlay.size(), QImage.Format_ARGB32_Premultiplied)
+    unsafe.fill(0)
+    overlay.render(unsafe)
+    assert unsafe.pixelColor(marker_x + 10, marker_y).alpha() == 0
+
+    overlay.set_last_seen_marker_style(LastSeenMarkerStyle.DOT)
+    dot_fallback = QImage(overlay.size(), QImage.Format_ARGB32_Premultiplied)
+    dot_fallback.fill(0)
+    overlay.render(dot_fallback)
+    dot = dot_fallback.pixelColor(marker_x, marker_y)
+    assert dot.alpha() > 0
+    assert dot.green() > dot.red()
+    assert dot_fallback.pixelColor(marker_x + 4, marker_y).alpha() == 0
+
+    overlay.affinity_result = AffinityResult(AffinityStatus.FAILED)
+    assert overlay.last_seen_marker_style is LastSeenMarkerStyle.DOT
+    failed_affinity = QImage(overlay.size(), QImage.Format_ARGB32_Premultiplied)
+    failed_affinity.fill(0)
+    overlay.render(failed_affinity)
+    assert failed_affinity.pixelColor(marker_x, marker_y).alpha() > 0
+
+    top = current.champions[0].identity
+    jungle = current.champions[1].identity
+    overlay.snapshot = TrackerSnapshot(
+        champions=(
+            ChampionView(top, (70, 80), False, 8.0),
+            ChampionView(jungle, (70, 80), False, 5.0),
+        )
+    )
+    clustered = QImage(overlay.size(), QImage.Format_ARGB32_Premultiplied)
+    clustered.fill(0)
+    overlay.render(clustered)
+    left_dot = clustered.pixelColor(marker_x - 3, marker_y)
+    right_dot = clustered.pixelColor(marker_x + 3, marker_y)
+    assert left_dot.red() > left_dot.green()
+    assert right_dot.green() > right_dot.red()
+
+    overlay.snapshot = current
+    overlay.set_last_seen_marker_style(LastSeenMarkerStyle.RING)
+    isolated["value"] = True
+    isolated_capture = QImage(overlay.size(), QImage.Format_ARGB32_Premultiplied)
+    isolated_capture.fill(0)
+    overlay.render(isolated_capture)
+    assert isolated_capture.pixelColor(marker_x + 10, marker_y).alpha() > 0
+
+    overlay.show_arrows = True
     assert not overlay.toggle_arrows()
     assert not overlay.toggle_last_seen()
+    overlay.set_last_seen_marker_style(LastSeenMarkerStyle.DOT)
+    hidden = QImage(overlay.size(), QImage.Format_ARGB32_Premultiplied)
+    hidden.fill(0)
+    overlay.render(hidden)
+    assert hidden.pixelColor(marker_x, marker_y).alpha() == 0
     overlay.update_overlay()
     overlay.set_capture_region(CaptureRegion(-100, -200, 120, 110))
     assert overlay.capture_region == CaptureRegion(-100, -200, 120, 110)
@@ -105,10 +169,23 @@ def test_tray_updates_and_dispatches(qapp: Any) -> None:
     assert tray.region_action.text() == "Minimap: 252 x 252 at 1655, 813"
     tray.update_affinity(AffinityResult(AffinityStatus.ACTIVE))
     assert tray.affinity_action.text() == "Capture exclusion: active"
+    tray.update_affinity(AffinityResult(AffinityStatus.FAILED))
+    assert "dot fallback available" in tray.affinity_action.text()
+    tray.update_affinity(AffinityResult(AffinityStatus.FAILED), capture_isolated=True)
+    assert tray.affinity_action.text() == "Overlay capture: isolated (League window)"
+    assert tray.marker_style_actions[LastSeenMarkerStyle.RING].isChecked()
+    assert not tray.marker_style_actions[LastSeenMarkerStyle.DOT].isChecked()
+    tray.marker_style_actions[LastSeenMarkerStyle.DOT].trigger()
+    assert dispatched[-1] == "set_marker_style_dot"
+    assert tray.marker_style_actions[LastSeenMarkerStyle.DOT].isChecked()
+    assert not tray.marker_style_actions[LastSeenMarkerStyle.RING].isChecked()
+    tray.update_marker_style(LastSeenMarkerStyle.DOT)
+    assert tray.marker_style_menu.title() == "Last-seen style: Minimal dot"
     top_level = [action.text() for action in tray.menu.actions()]
     assert "Select minimap area..." in top_level
     assert "Direction arrows" in top_level
     assert "Last-seen markers" in top_level
+    assert "Last-seen style: Minimal dot" in top_level
     assert "Pause detection" in top_level
     assert "Save timeline" not in top_level
     save_action = next(
@@ -126,10 +203,17 @@ def test_tray_respects_persisted_preferences_and_notifications(qapp: Any) -> Non
     tray = TrayController(
         qapp,
         lambda _name: None,
-        TrackerConfig(show_arrows=False, show_last_seen=False, show_notifications=False),
+        TrackerConfig(
+            show_arrows=False,
+            show_last_seen=False,
+            last_seen_marker_style=LastSeenMarkerStyle.DOT,
+            show_notifications=False,
+        ),
     )
     assert not tray.toggle_actions["toggle_arrows"].isChecked()
     assert not tray.toggle_actions["toggle_last_seen"].isChecked()
+    assert tray.marker_style_actions[LastSeenMarkerStyle.DOT].isChecked()
+    assert not tray.marker_style_actions[LastSeenMarkerStyle.RING].isChecked()
     assert not tray.toggle_actions["toggle_notifications"].isChecked()
 
 

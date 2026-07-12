@@ -15,6 +15,7 @@ from lol_minimap_tracker.config import (
     load_config,
     save_config,
 )
+from lol_minimap_tracker.domain.models import LastSeenMarkerStyle
 
 
 def test_config_loads_flat_capture_and_nested_hotkeys(tmp_path: Path) -> None:
@@ -44,12 +45,17 @@ def test_config_rejects_invalid_values(caplog: object) -> None:
             "health_stale_after_seconds": 0,
             "capture_recovery_failure_count": 0,
             "capture_recovery_backoff_seconds": -1,
+            "capture_backend": "anything",
+            "capture_region_space": "somewhere",
+            "league_process_name": "",
+            "window_capture_timeout_seconds": 0,
             "circle_radius_min": 50,
             "circle_radius_max": 20,
             "log_level": "LOUD",
             "exclude_overlay_from_capture": "false",
             "show_arrows": 1,
             "show_last_seen": "yes",
+            "last_seen_marker_style": "sparkle",
             "show_notifications": None,
         },
         logging.getLogger("test"),
@@ -75,10 +81,15 @@ def test_config_rejects_invalid_values(caplog: object) -> None:
     )
     assert config.circle_radius_min == DEFAULT_CONFIG.circle_radius_min
     assert config.circle_radius_max == DEFAULT_CONFIG.circle_radius_max
+    assert config.capture_backend == "league_window"
+    assert config.capture_region_space == "screen"
+    assert config.league_process_name == "League of Legends.exe"
+    assert config.window_capture_timeout_seconds == DEFAULT_CONFIG.window_capture_timeout_seconds
     assert config.log_level == "INFO"
     assert config.exclude_overlay_from_capture is True
     assert config.show_arrows is True
     assert config.show_last_seen is True
+    assert config.last_seen_marker_style is LastSeenMarkerStyle.RING
     assert config.show_notifications is True
 
 
@@ -116,6 +127,18 @@ def test_nested_capture_and_invalid_hotkeys_use_safe_defaults() -> None:
     assert config.enable_global_hotkeys is False
 
 
+def test_desktop_capture_rejects_client_relative_coordinates() -> None:
+    config = config_from_mapping(
+        {
+            "capture_backend": "desktop_mss",
+            "capture_region_space": "client",
+        },
+        logging.getLogger("test"),
+    )
+    assert config.capture_backend == "league_window"
+    assert config.capture_region_space == "client"
+
+
 def test_malformed_json_uses_defaults(tmp_path: Path) -> None:
     path = tmp_path / "config.json"
     path.write_text("{broken", encoding="utf-8")
@@ -134,10 +157,12 @@ def test_default_config_bootstrap_and_preference_round_trip(tmp_path: Path) -> N
         capture=CaptureRegion(top=-100, left=-1800, width=320, height=280),
         show_arrows=False,
         show_last_seen=False,
+        last_seen_marker_style=LastSeenMarkerStyle.DOT,
         show_notifications=False,
     )
     assert save_config(path, updated, logger)
     assert load_config(path, logger) == updated
+    assert json.loads(path.read_text(encoding="utf-8"))["last_seen_marker_style"] == "dot"
 
 
 def test_failed_atomic_save_preserves_existing_config(tmp_path: Path, monkeypatch: Any) -> None:

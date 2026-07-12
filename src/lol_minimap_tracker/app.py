@@ -14,12 +14,13 @@ from PyQt5.QtGui import QIcon
 from PyQt5.QtWidgets import QApplication, QSystemTrayIcon
 
 from .config import CaptureRegion, TrackerConfig, ensure_config, load_config, save_config
-from .domain.models import AffinityResult
+from .domain.models import AffinityResult, AffinityStatus, LastSeenMarkerStyle
 from .integrations.affinity import WindowsDisplayAffinityController
-from .integrations.capture import MssFrameSource
+from .integrations.capture import LeagueWindowFrameSource, MssFrameSource
 from .integrations.clock import SystemClock
 from .integrations.data_dragon import DataDragonClient
 from .integrations.hotkeys import KeyboardHotkeyService
+from .integrations.league_window import LeagueWindowFinder, enable_process_dpi_awareness
 from .integrations.live_client import LiveClientClient
 from .integrations.timeline import CsvTimelineSink
 from .logging_setup import configure_logging
@@ -33,9 +34,12 @@ from .ui.tray import ActionBridge, TrayController
 
 
 def run() -> int:
+    dpi_coordinates_are_physical = enable_process_dpi_awareness()
     paths = AppPaths.discover()
     paths.ensure_runtime_directories()
     logger = configure_logging(paths.log_dir)
+    if not dpi_coordinates_are_physical:
+        logger.warning("Per-monitor DPI awareness could not be verified")
     config_created = ensure_config(paths.config_path, logger)
     config = load_config(paths.config_path, logger)
     config_state = config
@@ -60,7 +64,19 @@ def run() -> int:
         paths.cache_dir,
         logger.getChild("data_dragon"),
     )
-    frame_source = MssFrameSource(config.capture)
+    if config.capture_backend == "league_window":
+        league_source = LeagueWindowFrameSource(
+            config.capture,
+            finder=LeagueWindowFinder(config.league_process_name),
+            timeout_seconds=config.window_capture_timeout_seconds,
+        )
+        if config.capture_region_space == "client":
+            league_source.set_client_region(config.capture)
+        frame_source: LeagueWindowFrameSource | MssFrameSource = league_source
+        logger.info("Capture backend: isolated League game window")
+    else:
+        frame_source = MssFrameSource(config.capture)
+        logger.warning("Capture backend: composed desktop region (explicit fallback)")
     engine = TrackerEngine(
         config=config,
         roster_provider=live_client,
@@ -78,11 +94,36 @@ def run() -> int:
     def affinity_changed(result: AffinityResult) -> None:
         nonlocal pending_affinity
         pending_affinity = result
-        logger.info("Capture exclusion: %s", result.status.value)
-        if result.error_code is not None:
-            logger.error("Display affinity failed with Win32 error %s", result.error_code)
+        if frame_source.isolates_overlay:
+            logger.info(
+                "Overlay capture is isolated by the League-window backend (display affinity: %s)",
+                result.status.value,
+            )
+            if result.error_code is not None:
+                logger.warning(
+                    "Display affinity returned Win32 error %s; window-only capture "
+                    "remains isolated",
+                    result.error_code,
+                )
+        else:
+            logger.info("Capture exclusion: %s", result.status.value)
+            if result.error_code is not None:
+                logger.error("Display affinity failed with Win32 error %s", result.error_code)
         if tray is not None:
-            tray.update_affinity(result)
+            tray.update_affinity(result, capture_isolated=frame_source.isolates_overlay)
+            if not frame_source.isolates_overlay and result.status is not AffinityStatus.ACTIVE:
+                fallback_message = (
+                    "Minimal color dot fallback is active; hollow rings remain hidden "
+                    "to prevent recapture."
+                    if config_state.last_seen_marker_style is LastSeenMarkerStyle.DOT
+                    else "Hollow rings are hidden to prevent recapture. Choose "
+                    "Last-seen style > Minimal color dot to use the manual fallback."
+                )
+                tray.notify(
+                    "Capture exclusion unavailable",
+                    fallback_message,
+                    QSystemTrayIcon.Warning,
+                )
 
     overlay = TransparentOverlay(
         snapshot_provider=engine.get_snapshot,
@@ -90,6 +131,8 @@ def run() -> int:
         icons=RoleIconRenderer(paths.role_asset_dir),
         affinity_controller=WindowsDisplayAffinityController(),
         affinity_changed=affinity_changed,
+        capture_isolated=lambda: frame_source.isolates_overlay,
+        capture_region_provider=lambda: frame_source.screen_region,
     )
     selector = RegionSelector()
 
@@ -115,6 +158,12 @@ def run() -> int:
         persist(replace(config_state, show_last_seen=state))
         return state
 
+    def set_last_seen_marker_style(style: LastSeenMarkerStyle) -> None:
+        overlay.set_last_seen_marker_style(style)
+        persist(replace(config_state, last_seen_marker_style=style))
+        if tray is not None:
+            tray.update_marker_style(style)
+
     def toggle_notifications() -> bool:
         state = not config_state.show_notifications
         persist(replace(config_state, show_notifications=state))
@@ -139,7 +188,16 @@ def run() -> int:
             return
         frame_source.set_region(value)
         overlay.set_capture_region(value)
-        persist(replace(config_state, capture=value))
+        if isinstance(frame_source, LeagueWindowFrameSource) and frame_source.client_region:
+            persist(
+                replace(
+                    config_state,
+                    capture=frame_source.client_region,
+                    capture_region_space="client",
+                )
+            )
+        else:
+            persist(replace(config_state, capture=value, capture_region_space="screen"))
         if tray is not None:
             tray.update_region(value)
             tray.notify(
@@ -167,6 +225,8 @@ def run() -> int:
         "toggle_arrows": toggle_arrows,
         "pause": engine.toggle_pause,
         "toggle_last_seen": toggle_last_seen,
+        "set_marker_style_ring": lambda: set_last_seen_marker_style(LastSeenMarkerStyle.RING),
+        "set_marker_style_dot": lambda: set_last_seen_marker_style(LastSeenMarkerStyle.DOT),
         "toggle_notifications": toggle_notifications,
         "toggle_timeline_logging": engine.toggle_timeline_logging,
         "open_configuration": open_configuration,
@@ -194,7 +254,7 @@ def run() -> int:
             QIcon(str(paths.role_asset_dir / "position-middle.svg")),
         )
         if pending_affinity is not None:
-            tray.update_affinity(pending_affinity)
+            tray.update_affinity(pending_affinity, capture_isolated=frame_source.isolates_overlay)
         tray.show()
         if config_created:
 
@@ -230,7 +290,13 @@ def run() -> int:
 
     status_timer = QTimer()
     if tray is not None:
-        status_timer.timeout.connect(lambda: tray.update_snapshot(engine.get_snapshot()))
+
+        def update_status() -> None:
+            if tray is not None:
+                tray.update_snapshot(engine.get_snapshot())
+                tray.update_region(frame_source.screen_region)
+
+        status_timer.timeout.connect(update_status)
         status_timer.start(500)
 
     cleanup_started = False
