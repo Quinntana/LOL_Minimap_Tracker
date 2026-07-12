@@ -89,7 +89,7 @@ def test_config_rejects_invalid_values(caplog: object) -> None:
     assert config.exclude_overlay_from_capture is True
     assert config.show_arrows is True
     assert config.show_last_seen is True
-    assert config.last_seen_marker_style is LastSeenMarkerStyle.RING
+    assert config.last_seen_marker_style is LastSeenMarkerStyle.PORTRAIT
     assert config.show_notifications is True
 
 
@@ -139,6 +139,14 @@ def test_desktop_capture_rejects_client_relative_coordinates() -> None:
     assert config.capture_region_space == "client"
 
 
+def test_legacy_ring_marker_style_migrates_to_portrait() -> None:
+    config = config_from_mapping(
+        {"last_seen_marker_style": "ring"},
+        logging.getLogger("test"),
+    )
+    assert config.last_seen_marker_style is LastSeenMarkerStyle.PORTRAIT
+
+
 def test_malformed_json_uses_defaults(tmp_path: Path) -> None:
     path = tmp_path / "config.json"
     path.write_text("{broken", encoding="utf-8")
@@ -157,12 +165,12 @@ def test_default_config_bootstrap_and_preference_round_trip(tmp_path: Path) -> N
         capture=CaptureRegion(top=-100, left=-1800, width=320, height=280),
         show_arrows=False,
         show_last_seen=False,
-        last_seen_marker_style=LastSeenMarkerStyle.DOT,
+        last_seen_marker_style=LastSeenMarkerStyle.ROLE,
         show_notifications=False,
     )
     assert save_config(path, updated, logger)
     assert load_config(path, logger) == updated
-    assert json.loads(path.read_text(encoding="utf-8"))["last_seen_marker_style"] == "dot"
+    assert json.loads(path.read_text(encoding="utf-8"))["last_seen_marker_style"] == "role"
 
 
 def test_failed_atomic_save_preserves_existing_config(tmp_path: Path, monkeypatch: Any) -> None:

@@ -61,7 +61,7 @@ class TrackerConfig:
     enable_global_hotkeys: bool = True
     show_arrows: bool = True
     show_last_seen: bool = True
-    last_seen_marker_style: LastSeenMarkerStyle = LastSeenMarkerStyle.RING
+    last_seen_marker_style: LastSeenMarkerStyle = LastSeenMarkerStyle.PORTRAIT
     show_notifications: bool = True
 
     def to_mapping(self) -> dict[str, Any]:
@@ -166,14 +166,18 @@ def config_from_mapping(values: dict[str, Any], logger: logging.Logger) -> Track
         logger.warning("Invalid league_process_name=%r; using default", league_process_name)
         league_process_name = "League of Legends.exe"
 
-    raw_marker_style = values.get("last_seen_marker_style", LastSeenMarkerStyle.RING.value)
-    try:
-        if not isinstance(raw_marker_style, str):
-            raise ValueError
-        marker_style = LastSeenMarkerStyle(raw_marker_style)
-    except ValueError:
-        logger.warning("Invalid last_seen_marker_style=%r; using ring", raw_marker_style)
-        marker_style = LastSeenMarkerStyle.RING
+    raw_marker_style = values.get("last_seen_marker_style", LastSeenMarkerStyle.PORTRAIT.value)
+    if raw_marker_style == "ring":
+        logger.warning("Legacy last_seen_marker_style='ring'; using portrait")
+        marker_style = LastSeenMarkerStyle.PORTRAIT
+    else:
+        try:
+            if not isinstance(raw_marker_style, str):
+                raise ValueError
+            marker_style = LastSeenMarkerStyle(raw_marker_style)
+        except ValueError:
+            logger.warning("Invalid last_seen_marker_style=%r; using portrait", raw_marker_style)
+            marker_style = LastSeenMarkerStyle.PORTRAIT
 
     return TrackerConfig(
         capture=capture,

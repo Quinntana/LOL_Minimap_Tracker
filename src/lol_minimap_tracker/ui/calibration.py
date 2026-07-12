@@ -35,6 +35,28 @@ def region_from_selection(
     )
 
 
+def square_selection_rect(start: QPoint, current: QPoint, bounds: QRect) -> QRect:
+    """Build a sign-aware, in-bounds square using inclusive QRect coordinates."""
+    if bounds.isEmpty() or not bounds.contains(start):
+        return QRect()
+
+    dx = current.x() - start.x()
+    dy = current.y() - start.y()
+    left_capacity = start.x() - bounds.left()
+    right_capacity = bounds.right() - start.x()
+    top_capacity = start.y() - bounds.top()
+    bottom_capacity = bounds.bottom() - start.y()
+
+    x_direction = 1 if dx > 0 else -1 if dx < 0 else (1 if right_capacity >= left_capacity else -1)
+    y_direction = 1 if dy > 0 else -1 if dy < 0 else (1 if bottom_capacity >= top_capacity else -1)
+    side = min(max(abs(dx), abs(dy)), bounds.width() - 1, bounds.height() - 1)
+    ideal_left = start.x() if x_direction > 0 else start.x() - side
+    ideal_top = start.y() if y_direction > 0 else start.y() - side
+    left = max(bounds.left(), min(ideal_left, bounds.right() - side))
+    top = max(bounds.top(), min(ideal_top, bounds.bottom() - side))
+    return QRect(left, top, side + 1, side + 1)
+
+
 class RegionSelector(QWidget):
     selected = pyqtSignal(object)
     cancelled = pyqtSignal()
@@ -64,7 +86,7 @@ class RegionSelector(QWidget):
     def selection_rect(self) -> QRect:
         if self._start is None or self._current is None:
             return QRect()
-        return QRect(self._start, self._current).normalized()
+        return square_selection_rect(self._start, self._current, self.rect())
 
     def cancel(self) -> None:
         self.hide()

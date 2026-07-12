@@ -180,6 +180,7 @@ def test_window_frame_source_copies_bgr_crop_and_tracks_moved_window() -> None:
     )
 
     assert source.isolates_overlay
+    assert source.game_client_center is None
     source.start()
     first = source.capture()
 
@@ -189,6 +190,7 @@ def test_window_frame_source_copies_bgr_crop_and_tracks_moved_window() -> None:
     assert np.all(first_buffer == 0)
     assert source.client_region == CaptureRegion(top=20, left=20, width=3, height=2)
     assert source.screen_region == CaptureRegion(top=220, left=120, width=3, height=2)
+    assert source.game_client_center == (290, 335)
 
     cached = source.capture()
     assert np.array_equal(cached, first)
@@ -204,6 +206,7 @@ def test_window_frame_source_copies_bgr_crop_and_tracks_moved_window() -> None:
 
     assert np.all(second == np.array([4, 5, 6], dtype=np.uint8))
     assert source.screen_region == CaptureRegion(top=420, left=320, width=3, height=2)
+    assert source.game_client_center == (490, 535)
     source.close()
     assert session.control.stop_calls == 1
     assert session.control.wait_calls == 1

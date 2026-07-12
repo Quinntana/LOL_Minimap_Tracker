@@ -51,7 +51,8 @@ class AffinityStatus(StrEnum):
 
 
 class LastSeenMarkerStyle(StrEnum):
-    RING = "ring"
+    PORTRAIT = "portrait"
+    ROLE = "role"
     DOT = "dot"
 
 
@@ -156,12 +157,6 @@ class TrackerSnapshot:
 class AffinityResult:
     status: AffinityStatus
     error_code: int | None = None
-
-
-@dataclass(frozen=True)
-class MarkerLayout:
-    champion_name: str
-    radius: int
 
 
 PortraitMap = Mapping[str, object]

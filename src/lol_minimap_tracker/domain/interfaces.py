@@ -61,3 +61,7 @@ class HotkeyService(Protocol):
 
 class DisplayAffinityController(Protocol):
     def apply(self, window_handle: int, enabled: bool) -> AffinityResult: ...
+
+
+class OverlayInputController(Protocol):
+    def apply(self, window_handle: int) -> bool: ...

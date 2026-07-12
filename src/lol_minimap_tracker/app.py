@@ -17,6 +17,7 @@ from .config import CaptureRegion, TrackerConfig, ensure_config, load_config, sa
 from .domain.models import AffinityResult, AffinityStatus, LastSeenMarkerStyle
 from .integrations.affinity import WindowsDisplayAffinityController
 from .integrations.capture import LeagueWindowFrameSource, MssFrameSource
+from .integrations.clickthrough import WindowsOverlayInputController
 from .integrations.clock import SystemClock
 from .integrations.data_dragon import DataDragonClient
 from .integrations.hotkeys import KeyboardHotkeyService
@@ -113,17 +114,30 @@ def run() -> int:
             tray.update_affinity(result, capture_isolated=frame_source.isolates_overlay)
             if not frame_source.isolates_overlay and result.status is not AffinityStatus.ACTIVE:
                 fallback_message = (
-                    "Minimal color dot fallback is active; hollow rings remain hidden "
-                    "to prevent recapture."
+                    "Minimal color dot fallback is active; portrait and role markers "
+                    "remain hidden to prevent recapture."
                     if config_state.last_seen_marker_style is LastSeenMarkerStyle.DOT
-                    else "Hollow rings are hidden to prevent recapture. Choose "
-                    "Last-seen style > Minimal color dot to use the manual fallback."
+                    else "Portrait and role markers are hidden to prevent recapture. Choose "
+                    "Missing marker > Minimal color dot to use the manual fallback."
                 )
                 tray.notify(
                     "Capture exclusion unavailable",
                     fallback_message,
                     QSystemTrayIcon.Warning,
                 )
+
+    def input_changed(active: bool) -> None:
+        if active:
+            logger.info("Overlay input mode: native click-through")
+            return
+        logger.error("Overlay native click-through could not be verified")
+        if tray is not None:
+            tray.notify(
+                "Overlay click-through unavailable",
+                "The overlay was hidden because native click-through could not be verified.",
+                QSystemTrayIcon.Critical,
+                force=True,
+            )
 
     overlay = TransparentOverlay(
         snapshot_provider=engine.get_snapshot,
@@ -133,6 +147,10 @@ def run() -> int:
         affinity_changed=affinity_changed,
         capture_isolated=lambda: frame_source.isolates_overlay,
         capture_region_provider=lambda: frame_source.screen_region,
+        portrait_provider=engine.get_portraits,
+        arrow_origin_provider=lambda: frame_source.game_client_center,
+        input_controller=WindowsOverlayInputController(),
+        input_changed=input_changed,
     )
     selector = RegionSelector()
 
@@ -163,6 +181,17 @@ def run() -> int:
         persist(replace(config_state, last_seen_marker_style=style))
         if tray is not None:
             tray.update_marker_style(style)
+            if (
+                style is not LastSeenMarkerStyle.DOT
+                and not frame_source.isolates_overlay
+                and overlay.affinity_result.status is not AffinityStatus.ACTIVE
+            ):
+                tray.notify(
+                    "Marker style saved but hidden",
+                    "Portrait and role markers require League-window capture or active "
+                    "capture exclusion. Use the minimal dot fallback until then.",
+                    QSystemTrayIcon.Warning,
+                )
 
     def toggle_notifications() -> bool:
         state = not config_state.show_notifications
@@ -225,7 +254,10 @@ def run() -> int:
         "toggle_arrows": toggle_arrows,
         "pause": engine.toggle_pause,
         "toggle_last_seen": toggle_last_seen,
-        "set_marker_style_ring": lambda: set_last_seen_marker_style(LastSeenMarkerStyle.RING),
+        "set_marker_style_portrait": lambda: set_last_seen_marker_style(
+            LastSeenMarkerStyle.PORTRAIT
+        ),
+        "set_marker_style_role": lambda: set_last_seen_marker_style(LastSeenMarkerStyle.ROLE),
         "set_marker_style_dot": lambda: set_last_seen_marker_style(LastSeenMarkerStyle.DOT),
         "toggle_notifications": toggle_notifications,
         "toggle_timeline_logging": engine.toggle_timeline_logging,

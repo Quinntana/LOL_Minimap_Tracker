@@ -18,13 +18,15 @@ Live Client Data API. It does not modify game files or process memory.
 
 Every enemy receives a stable, colorblind-conscious color for the match. The same
 color is used for the champion name outside the minimap and the selected last-seen
-marker. Missing enemies with a known prior position use either a hollow ring or a
-minimal dot, avoiding stale portraits or labels over the minimap.
+marker. Missing enemies with a known prior position use a faded champion portrait
+with a red X by default. A tinted role icon and a minimal color dot fallback are
+available as manual alternatives.
 
-Direction arrows keep their original state colors:
+Direction arrows encode camera-relative range without relying on a number:
 
-- Red: currently detected.
-- Yellow: last-seen position.
+- Solid red, amber, or green: a currently detected enemy is near, mid-range, or far
+  from the detected minimap camera box.
+- Dashed dim yellow: the arrow uses a stale last-seen position.
 
 ## Real-time analysis safeguards
 
@@ -49,7 +51,7 @@ The confidence, movement, health, and recovery values are configurable in
   region that follows the League window.
 - `league_process_name`: exact game executable used for window discovery.
 - `window_capture_timeout_seconds`: maximum wait for a fresh game-window frame.
-- `last_seen_marker_style`: persisted manual choice of `ring` or `dot`.
+- `last_seen_marker_style`: persisted manual choice of `portrait`, `role`, or `dot`.
 - `ssim_margin`: required separation from the second-best portrait score.
 - `confirmation_frames`: normal consecutive-frame requirement.
 - `confirmation_position_tolerance_pixels`: maximum movement within a confirmation run.
@@ -68,7 +70,7 @@ For desktop capture, the overlay requests `WDA_EXCLUDEFROMCAPTURE` on Windows 10
 version 2004 and newer. This is a best-effort Windows feature, not a security
 guarantee; if affinity cannot be verified, larger graphics inside the minimap are
 disabled.
-Hollow last-seen rings remain disabled in that state, but the user can explicitly
+Portrait and role markers remain disabled in that state, but the user can explicitly
 select the five-pixel identity-color dot fallback. The tracker never changes marker
 style automatically. Dot colors stay outside the detector's red hue bands and the
 dot is well below the normal circle-radius threshold, minimizing recapture feedback.
@@ -111,21 +113,26 @@ executable takes precedence, preserving fully portable setups. Legacy JSON store
 in `config.txt` remains readable but is deprecated and is never rewritten.
 
 Use `Select minimap area...` from the notification-area menu to calibrate without
-restarting. Drag around the full minimap and release. Detection pauses while the
-selection surface is open, then returns to its previous state. The selected global
-coordinates apply immediately to capture and rendering and are saved atomically.
+restarting. Drag around the full minimap and release; the selector stays square in
+every drag direction. Detection pauses while the selection surface is open, then
+returns to its previous state. The selected global coordinates apply immediately to
+capture and rendering and are saved atomically.
 
 The primary menu is focused on live play:
 
-- `Direction arrows`: red for current detections and yellow for stale positions.
-- `Last-seen markers`: shows or hides the last confirmed positions of missing enemies.
-- `Last-seen style`: manually selects hollow identity-color rings or minimal
-  identity-color dots. Ring is the default; dot is the desktop-capture fallback.
+- `Direction arrows`: solid near-camera/red-to-far/green arrows for current detections and
+  dashed yellow arrows for stale positions.
+- `Missing-enemy markers`: shows or hides last confirmed missing-enemy positions.
+- `Missing marker`: manually selects champion portrait + X (default), role icon, or
+  minimal identity-color dot. Rich modes require isolated capture; dot is the
+  desktop-capture fallback.
 - `Pause detection`: stops new capture and analysis until resumed.
 - `Select minimap area...`: recalibrates the capture rectangle across all displays.
 
 Timeline recording, configuration access, and the data folder are under `Advanced`.
 Left-clicking the notification-area icon opens the same menu as right-clicking it.
+The overlay uses native top-level input transparency and never accepts focus, so all
+map markers remain click-through.
 Arrow, marker visibility/style, notification, and capture-region preferences persist
 between runs.
 

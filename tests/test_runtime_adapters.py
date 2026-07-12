@@ -35,6 +35,7 @@ def test_mss_frame_source_reuses_and_closes_capture(monkeypatch: Any) -> None:
     capture = Capture()
     monkeypatch.setattr(capture_module.mss, "mss", lambda: capture)
     source = MssFrameSource(CaptureRegion(1, 2, 30, 20))
+    assert source.game_client_center is None
     source.start()
     source.start()
     frame = source.capture()

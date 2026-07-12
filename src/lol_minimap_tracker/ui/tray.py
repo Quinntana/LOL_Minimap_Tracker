@@ -65,21 +65,30 @@ class TrayController:
         )
         self._add_toggle(
             self.menu,
-            "Last-seen markers",
+            "Missing-enemy markers",
             "toggle_last_seen",
             config.show_last_seen,
             dispatch,
         )
-        self.marker_style_menu = cast(QMenu, self.menu.addMenu("Last-seen style"))
+        self.marker_style_menu = cast(QMenu, self.menu.addMenu("Missing marker"))
         self.marker_style_menu.setToolTipsVisible(True)
         self.marker_style_actions: dict[LastSeenMarkerStyle, QAction] = {}
         self.marker_style_group = QActionGroup(self.marker_style_menu)
         self.marker_style_group.setExclusive(True)
         self._add_marker_style(
-            "Hollow ring",
-            LastSeenMarkerStyle.RING,
-            "set_marker_style_ring",
-            "Large identity-color outline. Hidden if desktop capture cannot exclude the overlay.",
+            "Champion portrait + X (default)",
+            LastSeenMarkerStyle.PORTRAIT,
+            "set_marker_style_portrait",
+            "Faded champion portrait with a red X. Requires League-window capture "
+            "or active capture exclusion.",
+            dispatch,
+        )
+        self._add_marker_style(
+            "Role icon",
+            LastSeenMarkerStyle.ROLE,
+            "set_marker_style_role",
+            "Tinted role symbol with a red X. Requires League-window capture or "
+            "active capture exclusion.",
             dispatch,
         )
         self._add_marker_style(
@@ -174,9 +183,11 @@ class TrayController:
         title: str,
         message: str,
         icon: QSystemTrayIcon.MessageIcon = QSystemTrayIcon.Information,
+        *,
+        force: bool = False,
     ) -> None:
         notifications = self.toggle_actions.get("toggle_notifications")
-        if notifications is not None and notifications.isChecked():
+        if force or (notifications is not None and notifications.isChecked()):
             self.tray.showMessage(title, message, icon, 5000)
 
     def update_action(self, name: str, checked: bool) -> None:
@@ -189,8 +200,12 @@ class TrayController:
         if action is None:
             return
         action.setChecked(True)
-        label = "Minimal dot" if style is LastSeenMarkerStyle.DOT else "Hollow ring"
-        self.marker_style_menu.setTitle(f"Last-seen style: {label}")
+        labels = {
+            LastSeenMarkerStyle.PORTRAIT: "Champion portrait",
+            LastSeenMarkerStyle.ROLE: "Role icon",
+            LastSeenMarkerStyle.DOT: "Minimal dot",
+        }
+        self.marker_style_menu.setTitle(f"Missing marker: {labels[style]}")
 
     def update_region(self, region: CaptureRegion) -> None:
         self.region_action.setText(
@@ -221,6 +236,6 @@ class TrayController:
             f"Capture exclusion: {result.status.value} - dot fallback available"
         )
         self.affinity_action.setToolTip(
-            "Hollow rings are hidden to prevent feedback. Select the minimal dot style to "
-            "keep last-seen positions visible."
+            "Portrait and role markers are hidden to prevent feedback. Select the minimal "
+            "dot style to keep last-seen positions visible."
         )

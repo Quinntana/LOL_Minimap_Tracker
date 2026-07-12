@@ -203,6 +203,16 @@ def test_missing_portrait_is_retried_without_roster_change() -> None:
     assert portraits.calls == 2
 
 
+def test_portrait_snapshot_is_a_shallow_mapping_copy() -> None:
+    engine, _, _ = make_engine([active()])
+    engine.poll_roster()
+    exported = engine.get_portraits()
+    assert list(exported) == ["Aatrox"]
+    original = exported["Aatrox"]
+    exported.clear()
+    assert engine.get_portraits()["Aatrox"] is original
+
+
 def test_new_roster_clears_old_positions_and_identity() -> None:
     engine, _, _ = make_engine(
         [

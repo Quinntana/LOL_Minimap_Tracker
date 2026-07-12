@@ -29,7 +29,7 @@
     "enable_global_hotkeys": true,
     "show_arrows": true,
     "show_last_seen": true,
-    "last_seen_marker_style": "ring",
+    "last_seen_marker_style": "portrait",
     "show_notifications": true,
     "hotkeys": {
         "save_timeline": "ctrl+s",

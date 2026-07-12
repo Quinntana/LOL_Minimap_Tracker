@@ -83,6 +83,11 @@ class MssFrameSource:
         """MSS reads the composed desktop and therefore needs display affinity."""
         return False
 
+    @property
+    def game_client_center(self) -> tuple[int, int] | None:
+        """Desktop fallback does not own League window geometry."""
+        return None
+
     def set_region(self, region: CaptureRegion) -> None:
         with self._lock:
             self._region = region
@@ -157,6 +162,16 @@ class LeagueWindowFrameSource:
     def screen_region(self) -> CaptureRegion:
         with self._condition:
             return self._screen_region
+
+    @property
+    def game_client_center(self) -> tuple[int, int] | None:
+        with self._condition:
+            if self._geometry is None:
+                return None
+            return (
+                self._geometry.client_left + self._geometry.client_width // 2,
+                self._geometry.client_top + self._geometry.client_height // 2,
+            )
 
     @property
     def region(self) -> CaptureRegion:

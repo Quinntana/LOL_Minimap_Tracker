@@ -290,6 +290,11 @@ class TrackerEngine:
                 health=self._runtime_health(now),
             )
 
+    def get_portraits(self) -> dict[str, Image]:
+        """Return a thread-safe shallow copy for read-only overlay rendering."""
+        with self._lock:
+            return dict(self._portraits)
+
     def _required_confirmation_frames(
         self, champion_name: str, position: tuple[int, int], now: float
     ) -> int:
