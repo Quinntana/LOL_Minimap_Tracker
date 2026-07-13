@@ -20,7 +20,7 @@ from ..domain.models import (
 )
 from .champion_portraits import ChampionPortraitRenderer
 from .geometry import (
-    arrow_range_style,
+    arrow_range_color,
     marker_dot_offsets,
     marker_icon_offsets,
     segment_intersects_rect,
@@ -252,22 +252,16 @@ class TransparentOverlay(QMainWindow):
             end = start[0] + dx, start[1] + dy
             if not graphics_safe and segment_intersects_rect(start, end, map_tuple):
                 continue
-            if champion.is_current:
-                (red, green, blue), range_label = arrow_range_style(
-                    distance,
-                    self.capture_region.width,
-                    self.capture_region.height,
-                )
-                color = QColor(red, green, blue, 240)
-                pen = QPen(color, 3)
-                label = f"{champion.identity.champion_name} ({range_label})"
-                label_color = QColor(245, 247, 250, 235)
-            else:
-                color = QColor(245, 190, 45, 155)
-                pen = QPen(color, 2, Qt.DashLine)
-                age = champion.seconds_since_seen or 0.0
-                label = f"{champion.identity.champion_name} (last {age:.0f}s)"
-                label_color = QColor(245, 220, 150, 190)
+            red, green, blue = arrow_range_color(
+                distance,
+                self.capture_region.width,
+                self.capture_region.height,
+            )
+            color = QColor(red, green, blue, 240)
+            line_style = Qt.SolidLine if champion.is_current else Qt.DashLine
+            pen = QPen(color, 3, line_style)
+            label = champion.identity.champion_name
+            label_color = QColor(245, 247, 250, 235)
             painter.setPen(pen)
             painter.drawLine(start[0], start[1], end[0], end[1])
             if distance >= 5:
@@ -297,52 +291,59 @@ class TransparentOverlay(QMainWindow):
             painter.restore()
 
     @staticmethod
-    def _draw_missing_badge(painter: QPainter, x: int, y: int) -> None:
-        badge_x = x + 8
-        badge_y = y + 8
+    def _draw_missing_cross(painter: QPainter, x: int, y: int) -> None:
+        radius = 7
         painter.save()
-        painter.setPen(QPen(QColor(8, 8, 8, 245), 2))
-        painter.setBrush(QColor(20, 20, 20, 235))
-        painter.drawEllipse(QRect(badge_x - 5, badge_y - 5, 11, 11))
-        painter.setPen(QPen(QColor(235, 55, 55, 245), 2, Qt.SolidLine, Qt.RoundCap))
-        painter.drawLine(badge_x - 2, badge_y - 2, badge_x + 2, badge_y + 2)
-        painter.drawLine(badge_x + 2, badge_y - 2, badge_x - 2, badge_y + 2)
+        for color, width in ((QColor(8, 8, 8, 235), 4), (QColor(239, 68, 68, 250), 2)):
+            painter.setPen(QPen(color, width, Qt.SolidLine, Qt.RoundCap))
+            painter.drawLine(x - radius, y - radius, x + radius, y + radius)
+            painter.drawLine(x + radius, y - radius, x - radius, y + radius)
+        painter.restore()
+
+    @staticmethod
+    def _draw_dot_marker(painter: QPainter, champion: ChampionView, x: int, y: int) -> None:
+        painter.save()
+        painter.setRenderHint(QPainter.Antialiasing, False)
+        painter.setPen(QPen(QColor(8, 8, 8, 230), 1))
+        painter.setBrush(QColor(champion.identity.color))
+        painter.drawEllipse(QRect(x - 2, y - 2, 5, 5))
         painter.restore()
 
     def _draw_role_marker(self, painter: QPainter, champion: ChampionView, x: int, y: int) -> None:
-        painter.save()
-        painter.setPen(QPen(QColor(champion.identity.color), 1))
-        painter.setBrush(QColor(8, 10, 14, 205))
-        painter.drawEllipse(QRect(x - 11, y - 11, 22, 22))
+        halo = self.icons.render(
+            champion.identity.role_icon,
+            "#080A0E",
+            20,
+            0.78,
+        )
         icon = self.icons.render(
             champion.identity.role_icon,
             champion.identity.color,
-            18,
-            0.9,
+            16,
+            0.88,
         )
-        painter.drawPixmap(x - 9, y - 9, icon)
-        painter.restore()
-        self._draw_missing_badge(painter, x, y)
+        painter.drawPixmap(x - 10, y - 10, halo)
+        painter.drawPixmap(x - 8, y - 8, icon)
 
     def _draw_portrait_marker(
         self, painter: QPainter, champion: ChampionView, x: int, y: int
     ) -> None:
         portrait = self.portraits.get(champion.identity.champion_name)
         if portrait is None:
-            self._draw_role_marker(painter, champion, x, y)
+            self._draw_dot_marker(painter, champion, x, y)
             return
-        pixmap = self.portrait_renderer.render(champion.identity.champion_name, portrait, 24)
+        pixmap = self.portrait_renderer.render(champion.identity.champion_name, portrait, 20)
         if pixmap.isNull():
-            self._draw_role_marker(painter, champion, x, y)
+            self._draw_dot_marker(painter, champion, x, y)
             return
         painter.save()
-        painter.setOpacity(0.62)
-        painter.drawPixmap(x - 12, y - 12, pixmap)
+        painter.setOpacity(0.52)
+        painter.drawPixmap(x - 10, y - 10, pixmap)
         painter.restore()
         painter.setBrush(Qt.NoBrush)
         painter.setPen(QPen(QColor(champion.identity.color), 1))
-        painter.drawEllipse(QRect(x - 12, y - 12, 24, 24))
-        self._draw_missing_badge(painter, x, y)
+        painter.drawEllipse(QRect(x - 10, y - 10, 20, 20))
+        self._draw_missing_cross(painter, x, y)
 
     def _draw_markers(self, painter: QPainter) -> None:
         if not self.show_last_seen:
@@ -372,12 +373,7 @@ class TransparentOverlay(QMainWindow):
             y = offset_y + champion.position[1]
             if self.last_seen_marker_style is LastSeenMarkerStyle.DOT:
                 dot_x, dot_y = dot_offsets[champion.identity.champion_name]
-                painter.save()
-                painter.setRenderHint(QPainter.Antialiasing, False)
-                painter.setPen(QPen(QColor(8, 8, 8, 230), 1))
-                painter.setBrush(QColor(champion.identity.color))
-                painter.drawEllipse(QRect(x + dot_x - 2, y + dot_y - 2, 5, 5))
-                painter.restore()
+                self._draw_dot_marker(painter, champion, x + dot_x, y + dot_y)
                 continue
             icon_x, icon_y = icon_offsets[champion.identity.champion_name]
             x += icon_x

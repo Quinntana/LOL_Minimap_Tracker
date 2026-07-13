@@ -18,15 +18,14 @@ Live Client Data API. It does not modify game files or process memory.
 
 Every enemy receives a stable, colorblind-conscious color for the match. The same
 color is used for the champion name outside the minimap and the selected last-seen
-marker. Missing enemies with a known prior position use a faded champion portrait
-with a red X by default. A tinted role icon and a minimal color dot fallback are
-available as manual alternatives.
+marker. Missing enemies with a known prior position use a compact faded champion
+portrait with a centered red X by default. A standalone tinted role icon and a minimal
+color dot fallback are available as isolated manual alternatives.
 
 Direction arrows encode camera-relative range without relying on a number:
 
-- Solid red, amber, or green: a currently detected enemy is near, mid-range, or far
-  from the detected minimap camera box.
-- Dashed dim yellow: the arrow uses a stale last-seen position.
+- Red, amber, or green carries the distance warning for both live and last-seen positions.
+- Solid means currently detected; dashed means the arrow uses a last-seen position.
 
 ## Real-time analysis safeguards
 
@@ -120,8 +119,8 @@ capture and rendering and are saved atomically.
 
 The primary menu is focused on live play:
 
-- `Direction arrows`: solid near-camera/red-to-far/green arrows for current detections and
-  dashed yellow arrows for stale positions.
+- `Direction arrows`: red-to-green distance color for every arrow; solid means currently
+  detected and dashed means last seen.
 - `Missing-enemy markers`: shows or hides last confirmed missing-enemy positions.
 - `Missing marker`: manually selects champion portrait + X (default), role icon, or
   minimal identity-color dot. Rich modes require isolated capture; dot is the

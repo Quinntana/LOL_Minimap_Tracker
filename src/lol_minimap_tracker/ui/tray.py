@@ -87,8 +87,8 @@ class TrayController:
             "Role icon",
             LastSeenMarkerStyle.ROLE,
             "set_marker_style_role",
-            "Tinted role symbol with a red X. Requires League-window capture or "
-            "active capture exclusion.",
+            "Compact tinted role symbol. Requires League-window capture or active "
+            "capture exclusion.",
             dispatch,
         )
         self._add_marker_style(

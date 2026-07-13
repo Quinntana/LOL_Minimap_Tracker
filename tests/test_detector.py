@@ -50,6 +50,16 @@ def test_ssim_matches_identical_images() -> None:
     assert OpenCvChampionDetector.calculate_ssim(image, image) == 1.0
 
 
+def test_ssim_preserves_reference_score_without_scikit_image() -> None:
+    grayscale = np.arange(32 * 32, dtype=np.uint8).reshape((32, 32))
+    first = np.repeat(grayscale[:, :, np.newaxis], 3, axis=2)
+    second = np.roll(first, 3, axis=1)
+
+    score = OpenCvChampionDetector.calculate_ssim(first, second)
+
+    assert score == pytest.approx(0.9973607504417179, abs=1e-12)
+
+
 def test_rectangle_center_on_synthetic_frame() -> None:
     detector = OpenCvChampionDetector(TrackerConfig(), logging.getLogger("test"))
     image = np.zeros((200, 200, 3), dtype=np.uint8)

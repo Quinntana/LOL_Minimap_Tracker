@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "lol-minimap-tracker"
-version = "1.4.0"
+version = "1.5.0"
 description = "Private research overlay for League of Legends minimap tracking"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -16,9 +16,7 @@ dependencies = [
     "windows-capture>=2.0,<3; platform_system == 'Windows'",
     "keyboard>=0.13.5,<0.14",
     "numpy>=2.1,<3",
-    "scikit-image>=0.25,<0.27",
     "requests>=2.31,<3",
-    "Pillow>=10.4,<13",
 ]
 
 [project.optional-dependencies]
@@ -65,7 +63,6 @@ module = [
     "mss.*",
     "numpy.*",
     "PyQt5.*",
-    "skimage.*",
     "windows_capture.*",
 ]
 ignore_missing_imports = true

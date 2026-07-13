@@ -4,7 +4,7 @@ from typing import Any
 
 import numpy as np
 from PyQt5.QtCore import QEvent, QPoint, QPointF, QRect, Qt
-from PyQt5.QtGui import QColor, QImage, QMouseEvent
+from PyQt5.QtGui import QColor, QImage, QMouseEvent, QPen
 from PyQt5.QtTest import QTest
 from PyQt5.QtWidgets import QSystemTrayIcon
 
@@ -140,11 +140,12 @@ def test_overlay_renders_safe_and_fallback_modes(qapp: Any) -> None:
     marker_y = region.top - overlay._virtual_geometry.top() + 80
     current_x = region.left - overlay._virtual_geometry.left() + 30
     current_y = region.top - overlay._virtual_geometry.top() + 40
-    faded_portrait = image.pixelColor(marker_x, marker_y)
-    missing_badge = image.pixelColor(marker_x + 8, marker_y + 8)
+    missing_cross = image.pixelColor(marker_x, marker_y)
+    faded_portrait = image.pixelColor(marker_x, marker_y - 5)
     assert overlay.last_seen_marker_style is LastSeenMarkerStyle.PORTRAIT
-    assert missing_badge.red() > missing_badge.green()
+    assert missing_cross.red() > missing_cross.green()
     assert faded_portrait.blue() > faded_portrait.red()
+    assert image.pixelColor(marker_x + 12, marker_y + 12).alpha() == 0
     assert image.pixelColor(current_x, current_y).alpha() == 0
 
     overlay.affinity_result = AffinityResult(AffinityStatus.DISABLED)
@@ -163,8 +164,17 @@ def test_overlay_renders_safe_and_fallback_modes(qapp: Any) -> None:
     isolated_role = QImage(overlay.size(), QImage.Format_ARGB32_Premultiplied)
     isolated_role.fill(0)
     overlay.render(isolated_role)
-    role_badge = isolated_role.pixelColor(marker_x + 8, marker_y + 8)
-    assert role_badge.red() > role_badge.green()
+    role_pixels = [
+        isolated_role.pixelColor(x, y)
+        for x in range(marker_x - 10, marker_x + 11)
+        for y in range(marker_y - 10, marker_y + 11)
+    ]
+    assert any(pixel.alpha() > 0 for pixel in role_pixels)
+    assert not any(
+        pixel.red() > pixel.green() + 40 and pixel.red() > pixel.blue() + 40
+        for pixel in role_pixels
+    )
+    assert isolated_role.pixelColor(marker_x + 12, marker_y + 12).alpha() == 0
 
     overlay.set_last_seen_marker_style(LastSeenMarkerStyle.PORTRAIT)
     overlay.portraits = {}
@@ -172,6 +182,7 @@ def test_overlay_renders_safe_and_fallback_modes(qapp: Any) -> None:
     portrait_fallback.fill(0)
     overlay.render(portrait_fallback)
     assert portrait_fallback.pixelColor(marker_x, marker_y).alpha() > 0
+    assert portrait_fallback.pixelColor(marker_x + 4, marker_y).alpha() == 0
 
     isolated["value"] = False
     overlay.set_last_seen_marker_style(LastSeenMarkerStyle.DOT)
@@ -227,6 +238,21 @@ def test_overlay_renders_safe_and_fallback_modes(qapp: Any) -> None:
 
 
 def test_overlay_arrows_use_range_colors_and_game_window_origin(qapp: Any) -> None:
+    class RecordingPainter:
+        def __init__(self) -> None:
+            self.current_pen = QPen()
+            self.line_pens: list[QPen] = []
+            self.labels: list[str] = []
+
+        def setPen(self, pen: QPen | QColor) -> None:
+            self.current_pen = QPen(pen)
+
+        def drawLine(self, *_coordinates: object) -> None:
+            self.line_pens.append(QPen(self.current_pen))
+
+        def drawText(self, *_arguments: object) -> None:
+            self.labels.append(str(_arguments[-1]))
+
     identity = EnemyIdentity("Aatrox", Role.TOP, "#E69F00", "position-top.svg")
     state = {"snapshot": TrackerSnapshot(), "origin": (0, 0)}
     region = CaptureRegion(200, 300, 100, 100)
@@ -252,6 +278,10 @@ def test_overlay_arrows_use_range_colors_and_game_window_origin(qapp: Any) -> No
         camera_center=(50, 50),
     )
     overlay.snapshot = state["snapshot"]
+    current_painter = RecordingPainter()
+    overlay._draw_arrows(current_painter)  # type: ignore[arg-type]
+    assert current_painter.line_pens[0].style() == Qt.SolidLine
+    assert current_painter.labels == ["Aatrox"]
     close_image = QImage(overlay.size(), QImage.Format_ARGB32_Premultiplied)
     close_image.fill(0)
     overlay.render(close_image)
@@ -263,6 +293,9 @@ def test_overlay_arrows_use_range_colors_and_game_window_origin(qapp: Any) -> No
         camera_center=(50, 50),
     )
     overlay.snapshot = state["snapshot"]
+    far_painter = RecordingPainter()
+    overlay._draw_arrows(far_painter)  # type: ignore[arg-type]
+    assert far_painter.line_pens[0].color().green() > far_painter.line_pens[0].color().red()
     far_image = QImage(overlay.size(), QImage.Format_ARGB32_Premultiplied)
     far_image.fill(0)
     overlay.render(far_image)
@@ -274,15 +307,18 @@ def test_overlay_arrows_use_range_colors_and_game_window_origin(qapp: Any) -> No
         camera_center=(50, 50),
     )
     overlay.snapshot = state["snapshot"]
+    stale_painter = RecordingPainter()
+    overlay._draw_arrows(stale_painter)  # type: ignore[arg-type]
+    assert stale_painter.line_pens[0].style() == Qt.DashLine
+    assert stale_painter.line_pens[0].color().red() > stale_painter.line_pens[0].color().green()
+    assert stale_painter.labels == ["Aatrox"]
     stale_image = QImage(overlay.size(), QImage.Format_ARGB32_Premultiplied)
     stale_image.fill(0)
     overlay.render(stale_image)
     stale_pixels = [
         stale_image.pixelColor(origin_local[0] + offset, origin_local[1]) for offset in range(1, 14)
     ]
-    assert any(
-        pixel.red() > pixel.blue() and pixel.green() > pixel.blue() for pixel in stale_pixels
-    )
+    assert any(pixel.red() > pixel.green() for pixel in stale_pixels)
     assert origin_local != (overlay.rect().center().x(), overlay.rect().center().y())
 
     overlay.capture_isolated = lambda: True
@@ -396,6 +432,7 @@ def test_tray_updates_and_dispatches(qapp: Any) -> None:
     assert tray.marker_style_actions[LastSeenMarkerStyle.PORTRAIT].isChecked()
     assert not tray.marker_style_actions[LastSeenMarkerStyle.ROLE].isChecked()
     assert not tray.marker_style_actions[LastSeenMarkerStyle.DOT].isChecked()
+    assert "red X" not in tray.marker_style_actions[LastSeenMarkerStyle.ROLE].toolTip()
     tray.marker_style_actions[LastSeenMarkerStyle.ROLE].trigger()
     assert dispatched[-1] == "set_marker_style_role"
     assert tray.marker_style_actions[LastSeenMarkerStyle.ROLE].isChecked()

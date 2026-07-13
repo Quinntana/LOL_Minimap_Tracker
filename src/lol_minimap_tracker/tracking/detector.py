@@ -9,7 +9,6 @@ from typing import cast
 
 import cv2
 import numpy as np
-from skimage.metrics import structural_similarity as ssim
 
 from ..config import TrackerConfig
 from ..domain.interfaces import Image
@@ -27,6 +26,7 @@ class _MatchDecision:
 class OpenCvChampionDetector:
     MATCH_SIZE = 32
     MATCH_CROP_FRACTION = 0.60
+    SSIM_WINDOW_SIZE = 7
 
     def __init__(self, config: TrackerConfig, logger: logging.Logger) -> None:
         self.logger = logger
@@ -81,10 +81,53 @@ class OpenCvChampionDetector:
     @staticmethod
     def calculate_ssim(first: Image, second: Image) -> float:
         try:
+            if first.shape != second.shape:
+                return 0.0
             first_gray = cv2.cvtColor(first, cv2.COLOR_BGR2GRAY)
             second_gray = cv2.cvtColor(second, cv2.COLOR_BGR2GRAY)
-            score, _ = ssim(first_gray, second_gray, full=True)
-            return float(score)
+            window_size = OpenCvChampionDetector.SSIM_WINDOW_SIZE
+            if min(first_gray.shape) < window_size:
+                return 0.0
+
+            first_float = first_gray.astype(np.float64, copy=False)
+            second_float = second_gray.astype(np.float64, copy=False)
+
+            def window_mean(image: Image) -> Image:
+                return cast(
+                    Image,
+                    cv2.boxFilter(
+                        image,
+                        cv2.CV_64F,
+                        (window_size, window_size),
+                        normalize=True,
+                        borderType=cv2.BORDER_REFLECT,
+                    ),
+                )
+
+            first_mean = window_mean(first_float)
+            second_mean = window_mean(second_float)
+            sample_scale = window_size**2 / (window_size**2 - 1)
+            first_variance = sample_scale * (
+                window_mean(first_float * first_float) - first_mean * first_mean
+            )
+            second_variance = sample_scale * (
+                window_mean(second_float * second_float) - second_mean * second_mean
+            )
+            covariance = sample_scale * (
+                window_mean(first_float * second_float) - first_mean * second_mean
+            )
+            luminance_stabilizer = (0.01 * 255) ** 2
+            contrast_stabilizer = (0.03 * 255) ** 2
+            numerator = (2 * first_mean * second_mean + luminance_stabilizer) * (
+                2 * covariance + contrast_stabilizer
+            )
+            denominator = (
+                first_mean * first_mean + second_mean * second_mean + luminance_stabilizer
+            ) * (first_variance + second_variance + contrast_stabilizer)
+            score_map = numerator / denominator
+            padding = (window_size - 1) // 2
+            score = float(score_map[padding:-padding, padding:-padding].mean(dtype=np.float64))
+            return score if np.isfinite(score) else 0.0
         except (ValueError, cv2.error):
             return 0.0
 

@@ -6,7 +6,7 @@ from lol_minimap_tracker.domain.models import (
     Role,
 )
 from lol_minimap_tracker.ui.geometry import (
-    arrow_range_style,
+    arrow_range_color,
     marker_dot_offsets,
     marker_icon_offsets,
     normalized_map_distance,
@@ -98,14 +98,14 @@ def test_segment_intersection_is_conservative() -> None:
 
 
 def test_distance_arrow_colors_are_resolution_independent() -> None:
-    close = arrow_range_style(15, 100, 100)
-    medium = arrow_range_style(35, 100, 100)
-    far = arrow_range_style(55, 100, 100)
-    assert close == ((239, 68, 68), "near camera")
-    assert medium == ((245, 158, 11), "mid camera range")
-    assert far == ((34, 197, 94), "far from camera")
-    assert arrow_range_style(70, 200, 200) == medium
-    assert arrow_range_style(-1, 0, 0) == close
+    close = arrow_range_color(15, 100, 100)
+    medium = arrow_range_color(35, 100, 100)
+    far = arrow_range_color(55, 100, 100)
+    assert close == (239, 68, 68)
+    assert medium == (245, 158, 11)
+    assert far == (34, 197, 94)
+    assert arrow_range_color(70, 200, 200) == medium
+    assert arrow_range_color(-1, 0, 0) == close
     assert normalized_map_distance(50, 200, 100) == 0.5
 
 

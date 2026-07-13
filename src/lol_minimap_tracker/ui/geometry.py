@@ -191,12 +191,12 @@ def _interpolate_color(
     )
 
 
-def arrow_range_style(
+def arrow_range_color(
     distance: float,
     map_width: int,
     map_height: int,
-) -> tuple[tuple[int, int, int], str]:
-    """Return a near/red to far/green color and camera-relative range label."""
+) -> tuple[int, int, int]:
+    """Return a near/red to far/green camera-relative range color."""
     ratio = normalized_map_distance(distance, map_width, map_height)
     amount = max(
         0.0,
@@ -206,13 +206,7 @@ def arrow_range_style(
         color = _interpolate_color(ARROW_CLOSE_COLOR, ARROW_MEDIUM_COLOR, amount * 2)
     else:
         color = _interpolate_color(ARROW_MEDIUM_COLOR, ARROW_FAR_COLOR, (amount - 0.5) * 2)
-    if amount < 1 / 3:
-        label = "near camera"
-    elif amount < 2 / 3:
-        label = "mid camera range"
-    else:
-        label = "far from camera"
-    return color, label
+    return color
 
 
 def segment_intersects_rect(
