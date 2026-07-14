@@ -29,13 +29,21 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
-      - run: python -m pip install .[build,dev]
+          cache: pip
+          cache-dependency-path: requirements.lock
+      - run: python -m pip install --upgrade "pip==26.1.2"
+      - run: python -m pip install -r requirements.lock
+      - run: python -m pip install --no-deps --no-build-isolation -e .
+      - run: ruff format --check src tests tools main.py
+      - run: ruff check src tests tools main.py
+      - run: mypy src
+      - run: pytest
       - run: pyinstaller --clean --noconfirm LoLMinimapTracker.spec
       - shell: pwsh
         run: |
           $archive = pyi-archive_viewer -l -r dist/LoLMinimapTracker.exe
           $archiveText = $archive -join [Environment]::NewLine
-          foreach ($required in @("lol_minimap_tracker.app", "lol_minimap_tracker.domain.cooldowns", "lol_minimap_tracker.integrations.cooldown_data", "lol_minimap_tracker.integrations.cooldown_events", "lol_minimap_tracker.ui.cooldown_panel", "QtSvg.pyd", "cv2.pyd", "mss.windows", "windows_capture\\windows_capture.pyd", "position-top.svg")) {
+          foreach ($required in @("lol_minimap_tracker.app", "lol_minimap_tracker.domain.cooldowns", "lol_minimap_tracker.integrations.capture", "lol_minimap_tracker.integrations.clickthrough", "lol_minimap_tracker.integrations.cooldown_data", "lol_minimap_tracker.integrations.cooldown_events", "lol_minimap_tracker.integrations.data_dragon", "lol_minimap_tracker.integrations.live_client", "lol_minimap_tracker.ui.calibration", "lol_minimap_tracker.ui.champion_portraits", "lol_minimap_tracker.ui.cooldown_panel", "lol_minimap_tracker.ui.overlay", "QtSvg.pyd", "cv2.pyd", "mss.windows", "windows_capture.pyd", "position-top.svg", "position-unknown.svg")) {
             if ($archiveText -notmatch [regex]::Escape($required)) { throw "Missing $required" }
           }
           foreach ($forbidden in @("'imageio", "'PIL", "'scipy", "'skimage", "'tifffile")) {

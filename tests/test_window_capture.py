@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
+from threading import Event, current_thread
 from typing import Any
 
 import numpy as np
@@ -119,11 +121,52 @@ class FakeCaptureControl:
         self.wait_calls += 1
 
 
+class ThrowingCaptureControl(FakeCaptureControl):
+    def stop(self) -> None:
+        super().stop()
+        raise RuntimeError("native stop failed")
+
+    def wait(self) -> None:
+        super().wait()
+        raise RuntimeError("native wait failed")
+
+
+class BlockingCaptureControl(FakeCaptureControl):
+    def __init__(self, blocking_method: str) -> None:
+        super().__init__()
+        self.blocking_method = blocking_method
+        self.entered = Event()
+        self.release = Event()
+        self.wait_finished = Event()
+        self.worker_daemon: bool | None = None
+
+    def _block(self) -> None:
+        self.worker_daemon = current_thread().daemon
+        self.entered.set()
+        self.release.wait()
+
+    def stop(self) -> None:
+        super().stop()
+        if self.blocking_method == "stop":
+            self._block()
+
+    def wait(self) -> None:
+        super().wait()
+        if self.blocking_method == "wait":
+            self._block()
+        self.wait_finished.set()
+
+
 class FakeSession:
-    def __init__(self, initial_frame: np.ndarray[Any, Any] | None = None) -> None:
+    def __init__(
+        self,
+        initial_frame: np.ndarray[Any, Any] | None = None,
+        *,
+        control: FakeCaptureControl | None = None,
+    ) -> None:
         self.initial_frame = initial_frame
         self.handlers: dict[str, Any] = {}
-        self.control = FakeCaptureControl()
+        self.control = control or FakeCaptureControl()
         self.started = False
 
     def event(self, handler: Any) -> Any:
@@ -157,6 +200,24 @@ class FakeFactory:
         return self.sessions[len(self.hwnds) - 1]
 
 
+@pytest.mark.parametrize("value", [0.0, -1.0, float("inf"), float("nan"), True])
+def test_window_frame_source_rejects_invalid_timeouts(value: Any) -> None:
+    with pytest.raises(ValueError, match="timeout_seconds"):
+        LeagueWindowFrameSource(
+            CaptureRegion(),
+            finder=FakeFinder(geometry()),
+            capture_factory=FakeFactory([]),
+            timeout_seconds=value,
+        )
+    with pytest.raises(ValueError, match="stop_timeout_seconds"):
+        LeagueWindowFrameSource(
+            CaptureRegion(),
+            finder=FakeFinder(geometry()),
+            capture_factory=FakeFactory([]),
+            stop_timeout_seconds=value,
+        )
+
+
 def colored_frame(
     value: tuple[int, int, int], *, left: int = 30, top: int = 40
 ) -> np.ndarray[Any, Any]:
@@ -181,6 +242,7 @@ def test_window_frame_source_copies_bgr_crop_and_tracks_moved_window() -> None:
 
     assert source.isolates_overlay
     assert source.game_client_center is None
+    assert source.confirmed_client_region is None
     source.start()
     first = source.capture()
 
@@ -189,6 +251,7 @@ def test_window_frame_source_copies_bgr_crop_and_tracks_moved_window() -> None:
     assert np.all(first == np.array([11, 22, 33], dtype=np.uint8))
     assert np.all(first_buffer == 0)
     assert source.client_region == CaptureRegion(top=20, left=20, width=3, height=2)
+    assert source.confirmed_client_region == CaptureRegion(top=20, left=20, width=3, height=2)
     assert source.screen_region == CaptureRegion(top=220, left=120, width=3, height=2)
     assert source.game_client_center == (290, 335)
 
@@ -244,8 +307,90 @@ def test_window_frame_source_times_out_and_never_falls_back_to_desktop() -> None
     with pytest.raises(CaptureUnavailableError, match="Timed out"):
         source.capture()
 
+    # Geometry conversion alone is not enough to migrate persistent settings;
+    # the crop is confirmed only after a valid WGC frame arrives.
+    assert source.client_region == CaptureRegion(top=20, left=20, width=3, height=2)
+    assert source.confirmed_client_region is None
     assert session.control.stop_calls == 1
     assert session.control.wait_calls == 1
+
+
+def test_window_frame_source_cleanup_errors_do_not_mask_capture_error() -> None:
+    control = ThrowingCaptureControl()
+    session = FakeSession(control=control)
+    source = LeagueWindowFrameSource(
+        CaptureRegion(top=220, left=120, width=3, height=2),
+        finder=FakeFinder(geometry()),
+        capture_factory=FakeFactory([session]),
+        timeout_seconds=0.01,
+        stop_timeout_seconds=0.05,
+    )
+    source.start()
+
+    with pytest.raises(CaptureUnavailableError, match="Timed out waiting for a new"):
+        source.capture()
+
+    assert control.stop_calls == 1
+    assert control.wait_calls == 1
+
+
+@pytest.mark.parametrize("blocking_method", ["stop", "wait"])
+def test_window_frame_source_close_is_bounded_for_hung_native_control(
+    blocking_method: str,
+) -> None:
+    control = BlockingCaptureControl(blocking_method)
+    session = FakeSession(colored_frame((1, 2, 3)), control=control)
+    source = LeagueWindowFrameSource(
+        CaptureRegion(top=220, left=120, width=3, height=2),
+        finder=FakeFinder(geometry()),
+        capture_factory=FakeFactory([session]),
+        timeout_seconds=0.1,
+        stop_timeout_seconds=0.01,
+    )
+    source.start()
+    source.capture()
+
+    started = time.monotonic()
+    source.close()
+    elapsed = time.monotonic() - started
+
+    assert elapsed < 0.2
+    assert control.entered.wait(timeout=0.2)
+    assert control.worker_daemon is True
+
+    # Let the daemon finish so the test does not leave native-cleanup work behind.
+    control.release.set()
+    assert control.wait_finished.wait(timeout=0.2)
+
+
+def test_window_frame_source_recovers_while_previous_control_wait_is_hung() -> None:
+    blocked_control = BlockingCaptureControl("wait")
+    blocked = FakeSession(control=blocked_control)
+    recovered = FakeSession(colored_frame((7, 8, 9)))
+    factory = FakeFactory([blocked, recovered])
+    source = LeagueWindowFrameSource(
+        CaptureRegion(top=220, left=120, width=3, height=2),
+        finder=FakeFinder(geometry()),
+        capture_factory=factory,
+        timeout_seconds=0.01,
+        stop_timeout_seconds=0.01,
+    )
+    source.start()
+
+    with pytest.raises(CaptureUnavailableError, match="Timed out waiting for a new"):
+        source.capture()
+    assert blocked_control.entered.wait(timeout=0.2)
+
+    next_frame = source.capture()
+
+    assert np.all(next_frame == np.array([7, 8, 9], dtype=np.uint8))
+    assert factory.hwnds == [44, 44]
+
+    blocked_control.release.set()
+    assert blocked_control.wait_finished.wait(timeout=0.2)
+    source.close()
+    assert recovered.control.stop_calls == 1
+    assert recovered.control.wait_calls == 1
 
 
 def test_window_frame_source_restarts_when_the_last_frame_goes_stale() -> None:

@@ -8,7 +8,9 @@ from typing import Any
 
 import lol_minimap_tracker.config as config_module
 from lol_minimap_tracker.config import (
+    CONFIG_SCHEMA_VERSION,
     DEFAULT_CONFIG,
+    MAX_CAPTURE_PIXELS,
     CaptureRegion,
     config_from_mapping,
     ensure_config,
@@ -179,6 +181,92 @@ def test_nonfinite_and_extreme_numbers_cannot_crash_or_escape_bounds(tmp_path: P
     assert loaded.ssim_threshold == DEFAULT_CONFIG.ssim_threshold
 
 
+def test_huge_positive_runtime_values_fall_back_before_reaching_qt_or_capture() -> None:
+    huge = 10**100
+    loaded = config_from_mapping(
+        {
+            "width": huge,
+            "height": huge,
+            "update_interval_ms": huge,
+            "detection_timeout_seconds": huge,
+            "confirmation_position_tolerance_pixels": huge,
+            "max_position_jump_pixels": huge,
+            "max_position_speed_pixels_per_second": huge,
+            "health_stale_after_seconds": huge,
+            "capture_recovery_failure_count": huge,
+            "capture_recovery_backoff_seconds": huge,
+            "roster_refresh_interval_seconds": huge,
+            "roster_missing_grace_polls": huge,
+            "local_api_timeout_seconds": huge,
+            "window_capture_timeout_seconds": huge,
+            "circle_radius_min": huge,
+            "circle_radius_max": huge,
+            "cooldown_panel_left": huge,
+            "cooldown_panel_top": -huge,
+        },
+        logging.getLogger("test"),
+    )
+
+    assert loaded.capture.width == DEFAULT_CONFIG.capture.width
+    assert loaded.capture.height == DEFAULT_CONFIG.capture.height
+    assert loaded.update_interval_ms == DEFAULT_CONFIG.update_interval_ms
+    assert loaded.detection_timeout_seconds == DEFAULT_CONFIG.detection_timeout_seconds
+    assert (
+        loaded.confirmation_position_tolerance_pixels
+        == DEFAULT_CONFIG.confirmation_position_tolerance_pixels
+    )
+    assert loaded.max_position_jump_pixels == DEFAULT_CONFIG.max_position_jump_pixels
+    assert (
+        loaded.max_position_speed_pixels_per_second
+        == DEFAULT_CONFIG.max_position_speed_pixels_per_second
+    )
+    assert loaded.health_stale_after_seconds == DEFAULT_CONFIG.health_stale_after_seconds
+    assert loaded.capture_recovery_failure_count == DEFAULT_CONFIG.capture_recovery_failure_count
+    assert (
+        loaded.capture_recovery_backoff_seconds == DEFAULT_CONFIG.capture_recovery_backoff_seconds
+    )
+    assert loaded.roster_refresh_interval_seconds == DEFAULT_CONFIG.roster_refresh_interval_seconds
+    assert loaded.roster_missing_grace_polls == DEFAULT_CONFIG.roster_missing_grace_polls
+    assert loaded.local_api_timeout_seconds == DEFAULT_CONFIG.local_api_timeout_seconds
+    assert loaded.window_capture_timeout_seconds == DEFAULT_CONFIG.window_capture_timeout_seconds
+    assert loaded.circle_radius_min == DEFAULT_CONFIG.circle_radius_min
+    assert loaded.circle_radius_max == DEFAULT_CONFIG.circle_radius_max
+    assert loaded.cooldown_panel_left is None
+    assert loaded.cooldown_panel_top is None
+
+
+def test_combined_capture_area_is_bounded_even_when_each_dimension_is_valid() -> None:
+    loaded = config_from_mapping(
+        {
+            "top": 100,
+            "left": 200,
+            "width": 4096,
+            "height": MAX_CAPTURE_PIXELS // 4096 + 1,
+        },
+        logging.getLogger("test"),
+    )
+
+    assert loaded.capture == CaptureRegion(
+        top=100,
+        left=200,
+        width=DEFAULT_CONFIG.capture.width,
+        height=DEFAULT_CONFIG.capture.height,
+    )
+
+
+def test_negative_client_coordinates_use_a_safe_screen_default() -> None:
+    loaded = config_from_mapping(
+        {
+            "capture_region_space": "client",
+            "capture": {"top": -1, "left": 10, "width": 300, "height": 300},
+        },
+        logging.getLogger("test"),
+    )
+
+    assert loaded.capture_region_space == "screen"
+    assert loaded.capture == DEFAULT_CONFIG.capture
+
+
 def test_default_config_bootstrap_and_preference_round_trip(tmp_path: Path) -> None:
     path = tmp_path / "settings" / "config.json"
     logger = logging.getLogger("test")
@@ -222,3 +310,17 @@ def test_failed_atomic_save_preserves_existing_config(tmp_path: Path, monkeypatc
     assert not save_config(path, DEFAULT_CONFIG, logging.getLogger("test"))
     assert path.read_text(encoding="utf-8") == original
     assert not list(tmp_path.glob("*.tmp"))
+
+
+def test_future_config_schema_is_read_but_never_overwritten(tmp_path: Path) -> None:
+    path = tmp_path / "config.json"
+    original = '{"schema_version": 2, "show_arrows": false, "future_key": 42}\n'
+    path.write_text(original, encoding="utf-8")
+    logger = logging.getLogger("test")
+
+    loaded = load_config(path, logger)
+
+    assert loaded.schema_version == CONFIG_SCHEMA_VERSION + 1
+    assert not loaded.show_arrows
+    assert not save_config(path, loaded, logger)
+    assert path.read_text(encoding="utf-8") == original

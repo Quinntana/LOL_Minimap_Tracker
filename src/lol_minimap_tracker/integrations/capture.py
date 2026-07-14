@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import importlib
+import math
 import os
 import sys
 import time
 from collections.abc import Callable
-from threading import Condition, RLock
+from contextlib import suppress
+from threading import Condition, Event, Lock, RLock, Thread
 from typing import Protocol, cast
 
 import cv2
@@ -33,6 +35,65 @@ class CaptureControl(Protocol):
     def stop(self) -> None: ...
 
     def wait(self) -> None: ...
+
+
+class _BoundedControlStopper:
+    """Run potentially blocking native capture cleanup without blocking callers.
+
+    Only one daemon worker is allowed per frame source.  If native cleanup hangs,
+    subsequent requests replace the single pending request instead of creating an
+    unbounded collection of threads or retained native controls.
+    """
+
+    def __init__(self, timeout_seconds: float) -> None:
+        self._timeout_seconds = timeout_seconds
+        self._lock = Lock()
+        self._pending: tuple[CaptureControl, Event] | None = None
+        self._thread: Thread | None = None
+
+    def stop(self, control: CaptureControl | None) -> None:
+        if control is None:
+            return
+
+        completed = Event()
+        with self._lock:
+            displaced = self._pending
+            self._pending = (control, completed)
+            thread = self._thread
+            if thread is None or not thread.is_alive():
+                thread = Thread(
+                    target=self._run,
+                    name="league-capture-stop",
+                    daemon=True,
+                )
+                self._thread = thread
+                thread.start()
+
+        # A newer control is more useful to clean up than an older queued one.
+        # Wake a concurrent caller whose request was displaced; cleanup is
+        # explicitly best-effort in this poisoned-worker case.
+        if displaced is not None:
+            displaced[1].set()
+        completed.wait(timeout=self._timeout_seconds)
+
+    def _run(self) -> None:
+        while True:
+            with self._lock:
+                request = self._pending
+                self._pending = None
+                if request is None:
+                    self._thread = None
+                    return
+
+            control, completed = request
+            try:
+                # Cleanup must never replace the capture error that caused it.
+                with suppress(BaseException):
+                    control.stop()
+                with suppress(BaseException):
+                    control.wait()
+            finally:
+                completed.set()
 
 
 class WindowCaptureSession(Protocol):
@@ -132,15 +193,28 @@ class LeagueWindowFrameSource:
         finder: WindowFinder | None = None,
         capture_factory: WindowCaptureFactory | None = None,
         timeout_seconds: float = 1.0,
+        stop_timeout_seconds: float = 0.25,
     ) -> None:
-        if timeout_seconds <= 0:
+        if (
+            isinstance(timeout_seconds, bool)
+            or not math.isfinite(timeout_seconds)
+            or timeout_seconds <= 0
+        ):
             raise ValueError("timeout_seconds must be positive")
+        if (
+            isinstance(stop_timeout_seconds, bool)
+            or not math.isfinite(stop_timeout_seconds)
+            or stop_timeout_seconds <= 0
+        ):
+            raise ValueError("stop_timeout_seconds must be positive")
         self._pending_screen_region = region
         self._client_region: CaptureRegion | None = None
+        self._confirmed_client_region: CaptureRegion | None = None
         self._screen_region = region
         self._finder = finder or LeagueWindowFinder()
         self._capture_factory = capture_factory or _default_window_capture_factory
         self._timeout_seconds = timeout_seconds
+        self._control_stopper = _BoundedControlStopper(stop_timeout_seconds)
         self._condition = Condition(RLock())
         self._started = False
         self._session: WindowCaptureSession | None = None
@@ -183,10 +257,17 @@ class LeagueWindowFrameSource:
         with self._condition:
             return self._client_region
 
+    @property
+    def confirmed_client_region(self) -> CaptureRegion | None:
+        """Return the client crop only after WGC produced a valid frame for it."""
+        with self._condition:
+            return self._confirmed_client_region
+
     def set_region(self, region: CaptureRegion) -> None:
         """Set a physical screen-space region and convert it against current geometry."""
         with self._condition:
             self._region_generation += 1
+            self._confirmed_client_region = None
             if self._geometry is None:
                 self._pending_screen_region = region
                 self._client_region = None
@@ -202,6 +283,7 @@ class LeagueWindowFrameSource:
         """Set a client-relative minimap region for a migrated configuration."""
         with self._condition:
             self._region_generation += 1
+            self._confirmed_client_region = None
             if self._geometry is not None:
                 self._geometry.validate_client_region(region)
                 self._screen_region = self._geometry.client_to_screen(region)
@@ -263,6 +345,7 @@ class LeagueWindowFrameSource:
                     return
                 self._geometry = geometry
                 self._screen_region = geometry.client_to_screen(client_region)
+                self._confirmed_client_region = client_region
                 self._latest = image
                 self._sequence += 1
                 self._last_error = None
@@ -332,14 +415,8 @@ class LeagueWindowFrameSource:
                 raise
             raise CaptureUnavailableError(f"Could not start League window capture: {exc}") from exc
 
-    @staticmethod
-    def _stop_control(control: CaptureControl | None) -> None:
-        if control is None:
-            return
-        try:
-            control.stop()
-        finally:
-            control.wait()
+    def _stop_control(self, control: CaptureControl | None) -> None:
+        self._control_stopper.stop(control)
 
     def _discard_session(self) -> None:
         with self._condition:

@@ -13,6 +13,23 @@ from typing import Any
 
 from .domain.models import ArrowDisplayMode, LastSeenMarkerStyle
 
+# Keep untrusted JSON values comfortably inside the coordinate and allocation
+# ranges used by Qt, MSS, OpenCV, and Windows Graphics Capture.  A League
+# minimap is normally only a few hundred pixels wide; the larger limits retain
+# room for high-DPI and unusual multi-monitor setups without permitting a
+# malformed configuration to request a multi-gigabyte frame.
+MAX_SCREEN_COORDINATE = 1_000_000
+MAX_CAPTURE_DIMENSION = 4_096
+MAX_CAPTURE_PIXELS = 4_194_304
+MAX_TIMER_INTERVAL_MS = 60_000
+MAX_DURATION_SECONDS = 3_600.0
+MAX_PIXEL_DISTANCE = 16_384.0
+MAX_POSITION_SPEED = 65_536.0
+MAX_RETRY_COUNT = 10_000
+MAX_API_TIMEOUT_SECONDS = 60.0
+CONFIG_SCHEMA_VERSION = 1
+MAX_CONFIG_SCHEMA_VERSION = 1_000_000
+
 
 @dataclass(frozen=True)
 class CaptureRegion:
@@ -34,6 +51,7 @@ class HotkeyConfig:
 
 @dataclass(frozen=True)
 class TrackerConfig:
+    schema_version: int = CONFIG_SCHEMA_VERSION
     capture: CaptureRegion = field(default_factory=CaptureRegion)
     hotkeys: HotkeyConfig = field(default_factory=HotkeyConfig)
     ssim_threshold: float = 0.3
@@ -115,18 +133,46 @@ def _number(
 
 
 def _optional_integer(
-    values: dict[str, Any], key: str, default: int | None, logger: logging.Logger
+    values: dict[str, Any],
+    key: str,
+    default: int | None,
+    logger: logging.Logger,
+    minimum: int | None = None,
+    maximum: int | None = None,
 ) -> int | None:
     value = values.get(key, default)
     if value is None:
         return None
-    if not isinstance(value, int) or isinstance(value, bool):
+    valid = isinstance(value, int) and not isinstance(value, bool)
+    if valid and minimum is not None:
+        valid = value >= minimum
+    if valid and maximum is not None:
+        valid = value <= maximum
+    if not valid:
         logger.warning("Invalid %s=%r; using %r", key, value, default)
         return default
-    return value
+    return int(value)
 
 
 def config_from_mapping(values: dict[str, Any], logger: logging.Logger) -> TrackerConfig:
+    schema_version = int(
+        _number(
+            values,
+            "schema_version",
+            CONFIG_SCHEMA_VERSION,
+            logger,
+            1,
+            MAX_CONFIG_SCHEMA_VERSION,
+        )
+    )
+    if schema_version > CONFIG_SCHEMA_VERSION:
+        logger.warning(
+            "Configuration schema %s is newer than supported schema %s; "
+            "settings will be read but not overwritten",
+            schema_version,
+            CONFIG_SCHEMA_VERSION,
+        )
+    default_capture = CaptureRegion()
     capture_values = values.get("capture", {})
     if not isinstance(capture_values, dict):
         capture_values = {}
@@ -149,14 +195,65 @@ def config_from_mapping(values: dict[str, Any], logger: logging.Logger) -> Track
         }
     )
 
-    capture = CaptureRegion(
-        top=int(_number(flat_capture, "top", 813, logger, -1_000_000, 1_000_000)),
-        left=int(_number(flat_capture, "left", 1655, logger, -1_000_000, 1_000_000)),
-        width=int(_number(flat_capture, "width", 252, logger, 1, 65_536)),
-        height=int(_number(flat_capture, "height", 252, logger, 1, 65_536)),
+    capture_top = int(
+        _number(
+            flat_capture,
+            "top",
+            default_capture.top,
+            logger,
+            -MAX_SCREEN_COORDINATE,
+            MAX_SCREEN_COORDINATE,
+        )
     )
-    radius_min = int(_number(values, "circle_radius_min", 12, logger, 1))
-    radius_max = int(_number(values, "circle_radius_max", 40, logger, 1))
+    capture_left = int(
+        _number(
+            flat_capture,
+            "left",
+            default_capture.left,
+            logger,
+            -MAX_SCREEN_COORDINATE,
+            MAX_SCREEN_COORDINATE,
+        )
+    )
+    capture_width = int(
+        _number(
+            flat_capture,
+            "width",
+            default_capture.width,
+            logger,
+            1,
+            MAX_CAPTURE_DIMENSION,
+        )
+    )
+    capture_height = int(
+        _number(
+            flat_capture,
+            "height",
+            default_capture.height,
+            logger,
+            1,
+            MAX_CAPTURE_DIMENSION,
+        )
+    )
+    if capture_width * capture_height > MAX_CAPTURE_PIXELS:
+        logger.warning(
+            "Capture area %sx%s exceeds the safe %s-pixel limit; using default size %sx%s",
+            capture_width,
+            capture_height,
+            MAX_CAPTURE_PIXELS,
+            default_capture.width,
+            default_capture.height,
+        )
+        capture_width = default_capture.width
+        capture_height = default_capture.height
+    capture = CaptureRegion(
+        top=capture_top,
+        left=capture_left,
+        width=capture_width,
+        height=capture_height,
+    )
+    radius_min = int(_number(values, "circle_radius_min", 12, logger, 1, MAX_CAPTURE_DIMENSION))
+    radius_max = int(_number(values, "circle_radius_max", 40, logger, 1, MAX_CAPTURE_DIMENSION))
     if radius_min > radius_max:
         logger.warning("circle_radius_min exceeds circle_radius_max; using defaults")
         radius_min, radius_max = 12, 40
@@ -185,6 +282,12 @@ def config_from_mapping(values: dict[str, Any], logger: logging.Logger) -> Track
             "desktop_mss requires screen-space coordinates; keeping league_window backend"
         )
         capture_backend = "league_window"
+    if capture_region_space == "client" and (capture.left < 0 or capture.top < 0):
+        logger.warning(
+            "Client-space capture coordinates cannot be negative; using the default screen region"
+        )
+        capture = default_capture
+        capture_region_space = "screen"
     league_process_name = values.get("league_process_name", "League of Legends.exe")
     if not isinstance(league_process_name, str) or not league_process_name.strip():
         logger.warning("Invalid league_process_name=%r; using default", league_process_name)
@@ -213,48 +316,116 @@ def config_from_mapping(values: dict[str, Any], logger: logging.Logger) -> Track
             marker_style = LastSeenMarkerStyle.ROLE
 
     return TrackerConfig(
+        schema_version=schema_version,
         capture=capture,
         hotkeys=hotkeys,
         ssim_threshold=float(_number(values, "ssim_threshold", 0.3, logger, 0.0, 1.0)),
         ssim_margin=float(_number(values, "ssim_margin", 0.04, logger, 0.0, 1.0)),
         circle_radius_min=radius_min,
         circle_radius_max=radius_max,
-        update_interval_ms=int(_number(values, "update_interval_ms", 100, logger, 16)),
+        update_interval_ms=int(
+            _number(values, "update_interval_ms", 100, logger, 16, MAX_TIMER_INTERVAL_MS)
+        ),
         detection_timeout_seconds=float(
-            _number(values, "detection_timeout_seconds", 4.0, logger, 0.0)
+            _number(
+                values,
+                "detection_timeout_seconds",
+                4.0,
+                logger,
+                0.0,
+                MAX_DURATION_SECONDS,
+            )
         ),
         confirmation_frames=int(_number(values, "confirmation_frames", 2, logger, 1, 10)),
         confirmation_position_tolerance_pixels=float(
-            _number(values, "confirmation_position_tolerance_pixels", 10.0, logger, 0.0)
+            _number(
+                values,
+                "confirmation_position_tolerance_pixels",
+                10.0,
+                logger,
+                0.0,
+                MAX_PIXEL_DISTANCE,
+            )
         ),
         jump_confirmation_frames=int(_number(values, "jump_confirmation_frames", 3, logger, 1, 10)),
         max_position_jump_pixels=float(
-            _number(values, "max_position_jump_pixels", 18.0, logger, 0.0)
+            _number(
+                values,
+                "max_position_jump_pixels",
+                18.0,
+                logger,
+                0.0,
+                MAX_PIXEL_DISTANCE,
+            )
         ),
         max_position_speed_pixels_per_second=float(
-            _number(values, "max_position_speed_pixels_per_second", 140.0, logger, 0.0)
+            _number(
+                values,
+                "max_position_speed_pixels_per_second",
+                140.0,
+                logger,
+                0.0,
+                MAX_POSITION_SPEED,
+            )
         ),
         health_stale_after_seconds=float(
-            _number(values, "health_stale_after_seconds", 1.0, logger, 0.1)
+            _number(
+                values,
+                "health_stale_after_seconds",
+                1.0,
+                logger,
+                0.1,
+                MAX_DURATION_SECONDS,
+            )
         ),
         capture_recovery_failure_count=int(
-            _number(values, "capture_recovery_failure_count", 3, logger, 1)
+            _number(values, "capture_recovery_failure_count", 3, logger, 1, MAX_RETRY_COUNT)
         ),
         capture_recovery_backoff_seconds=float(
-            _number(values, "capture_recovery_backoff_seconds", 1.0, logger, 0.0)
+            _number(
+                values,
+                "capture_recovery_backoff_seconds",
+                1.0,
+                logger,
+                0.0,
+                MAX_DURATION_SECONDS,
+            )
         ),
         roster_refresh_interval_seconds=float(
-            _number(values, "roster_refresh_interval_seconds", 5.0, logger, 1.0)
+            _number(
+                values,
+                "roster_refresh_interval_seconds",
+                5.0,
+                logger,
+                1.0,
+                MAX_DURATION_SECONDS,
+            )
         ),
-        roster_missing_grace_polls=int(_number(values, "roster_missing_grace_polls", 3, logger, 1)),
+        roster_missing_grace_polls=int(
+            _number(values, "roster_missing_grace_polls", 3, logger, 1, MAX_RETRY_COUNT)
+        ),
         local_api_timeout_seconds=float(
-            _number(values, "local_api_timeout_seconds", 1.0, logger, 0.1)
+            _number(
+                values,
+                "local_api_timeout_seconds",
+                1.0,
+                logger,
+                0.1,
+                MAX_API_TIMEOUT_SECONDS,
+            )
         ),
         capture_backend=capture_backend,
         capture_region_space=capture_region_space,
         league_process_name=league_process_name.strip(),
         window_capture_timeout_seconds=float(
-            _number(values, "window_capture_timeout_seconds", 1.0, logger, 0.05)
+            _number(
+                values,
+                "window_capture_timeout_seconds",
+                1.0,
+                logger,
+                0.05,
+                MAX_API_TIMEOUT_SECONDS,
+            )
         ),
         log_level=log_level,
         exclude_overlay_from_capture=_boolean(values, "exclude_overlay_from_capture", True, logger),
@@ -269,8 +440,22 @@ def config_from_mapping(values: dict[str, Any], logger: logging.Logger) -> Track
         show_notifications=_boolean(values, "show_notifications", True, logger),
         cooldown_tracker_enabled=_boolean(values, "cooldown_tracker_enabled", False, logger),
         cooldown_panel_locked=_boolean(values, "cooldown_panel_locked", False, logger),
-        cooldown_panel_left=_optional_integer(values, "cooldown_panel_left", None, logger),
-        cooldown_panel_top=_optional_integer(values, "cooldown_panel_top", None, logger),
+        cooldown_panel_left=_optional_integer(
+            values,
+            "cooldown_panel_left",
+            None,
+            logger,
+            -MAX_SCREEN_COORDINATE,
+            MAX_SCREEN_COORDINATE,
+        ),
+        cooldown_panel_top=_optional_integer(
+            values,
+            "cooldown_panel_top",
+            None,
+            logger,
+            -MAX_SCREEN_COORDINATE,
+            MAX_SCREEN_COORDINATE,
+        ),
     )
 
 
@@ -292,6 +477,13 @@ def load_config(path: Path, logger: logging.Logger) -> TrackerConfig:
 
 def save_config(path: Path, config: TrackerConfig, logger: logging.Logger) -> bool:
     """Atomically persist a complete canonical configuration."""
+    if config.schema_version > CONFIG_SCHEMA_VERSION:
+        logger.error(
+            "Refusing to overwrite configuration schema %s with older schema %s",
+            config.schema_version,
+            CONFIG_SCHEMA_VERSION,
+        )
+        return False
     temporary_path: Path | None = None
     try:
         path.parent.mkdir(parents=True, exist_ok=True)

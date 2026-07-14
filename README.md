@@ -106,7 +106,8 @@ See [Microsoft's display-affinity documentation](https://learn.microsoft.com/en-
 
 ## Development
 
-Python 3.11 or newer is supported. The known-good Windows build uses Python 3.13.
+Python 3.11 or newer is supported for source development. Reproducible Windows executable
+builds use the pinned Windows x64 CPython 3.13 environment in `requirements.lock`.
 
 ```powershell
 python -m venv .venv
@@ -126,9 +127,9 @@ offscreen platform. League of Legends and administrator access are not required.
 powershell -NoProfile -ExecutionPolicy Bypass -File .\build_exe.ps1
 ```
 
-The build installs `requirements.lock`, validates the source, creates
-`dist/LoLMinimapTracker.exe`, copies `config.json`, inspects the embedded archive,
-and prints a SHA-256 hash. It never launches the executable.
+The build requires 64-bit CPython 3.13, installs `requirements.lock`, validates the source,
+creates `dist/LoLMinimapTracker.exe`, inspects the embedded archive, and prints a SHA-256
+hash. It never launches the executable or bundles a live settings file.
 
 The executable is unsigned, so Windows SmartScreen or endpoint-security software
 may restrict it. The project does not request elevation and has no installer.
@@ -138,7 +139,9 @@ may restrict it. The project does not request elevation and has no installer.
 On first run, the portable executable creates an editable configuration at
 `%LOCALAPPDATA%\LoLMinimapTracker\config.json`. A `config.json` placed beside the
 executable takes precedence, preserving fully portable setups. Legacy JSON stored
-in `config.txt` remains readable but is deprecated and is never rewritten.
+in `config.txt` remains readable but is deprecated and is never rewritten. Settings carry
+a schema version; a newer schema can be read conservatively but is never overwritten by an
+older executable.
 
 Use `Select minimap area...` from the notification-area menu to calibrate without
 restarting. Drag around the full minimap and release; the selector stays square in
@@ -191,9 +194,11 @@ The application uses Riot's documented Live Client endpoints:
 
 - `https://127.0.0.1:2999/liveclientdata/activeplayername`
 - `https://127.0.0.1:2999/liveclientdata/playerlist`
+- `https://127.0.0.1:2999/liveclientdata/allgamedata` (bounded fallback)
 
-Run `python tools/verify_ddragon.py` to verify the current Data Dragon version,
-champion metadata, and one portrait without modifying local data.
+Run `python tools/verify_ddragon.py` to verify the VN realm's current Data Dragon version,
+full champion catalog, and one portrait without modifying local data. Runtime catalog
+updates are staged and only replace the last-known-good snapshot after validation.
 
 Role SVGs are vendored from
 [CommunityDragon](https://communitydragon.org/documentation/assets), which operates

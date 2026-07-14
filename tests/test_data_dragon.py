@@ -65,15 +65,28 @@ def metadata(
     *,
     key: str = "MonkeyKing",
     name: str = "Wukong",
+    version: str = "16.13.1",
+    count: int = DataDragonClient.MIN_CHAMPION_RECORDS,
 ) -> dict[str, Any]:
-    return {
-        "data": {
-            key: {
-                "id": key,
-                "name": name,
-                "image": {"full": filename},
-            }
+    data: dict[str, Any] = {
+        key: {
+            "id": key,
+            "name": name,
+            "image": {"full": filename},
         }
+    }
+    for index in range(count - 1):
+        identifier = f"FixtureChampion{index}"
+        data[identifier] = {
+            "id": identifier,
+            "name": f"Fixture Champion {index}",
+            "image": {"full": f"{identifier}.png"},
+        }
+    return {
+        "type": "champion",
+        "format": "standAloneComplex",
+        "version": version,
+        "data": data,
     }
 
 
@@ -133,6 +146,17 @@ def test_malformed_realm_without_cache_returns_no_metadata(tmp_path: Path) -> No
     assert client.get_metadata() == {}
 
 
+def test_realm_default_version_fallback_survives_missing_component_key(tmp_path: Path) -> None:
+    payload = {"cdn": CDN, "dd": "16.13.1", "n": {}}
+    client = DataDragonClient(
+        tmp_path,
+        logging.getLogger("test"),
+        Session([Response(payload), Response(metadata())]),  # type: ignore[arg-type]
+    )
+
+    assert client.get_metadata()["wukong"] == "MonkeyKing.png"
+
+
 def test_corrupt_remote_and_cached_metadata_returns_empty(tmp_path: Path) -> None:
     cache = tmp_path / "ddragon"
     (cache / "16.13.1").mkdir(parents=True)
@@ -182,6 +206,31 @@ def test_transient_metadata_failure_retries_without_restart(tmp_path: Path) -> N
     assert session.responses == []
 
 
+def test_transient_realm_failure_uses_short_backoff_then_recovers(tmp_path: Path) -> None:
+    clock = Clock()
+    session = Session(
+        [
+            requests.ConnectionError("temporary"),
+            Response(realm()),
+            Response(metadata()),
+        ]
+    )
+    client = DataDragonClient(
+        tmp_path,
+        logging.getLogger("test"),
+        session,  # type: ignore[arg-type]
+        realm_retry_delay=5,
+        monotonic=clock.monotonic,
+    )
+
+    assert client.get_metadata() == {}
+    assert client.get_metadata() == {}
+    assert session.calls == [REALM_URL]
+    clock.now += 5
+    assert client.get_metadata()["wukong"] == "MonkeyKing.png"
+    assert session.responses == []
+
+
 def test_realm_is_refreshed_only_after_injected_ttl(tmp_path: Path) -> None:
     clock = Clock()
     session = Session(
@@ -219,13 +268,26 @@ def test_patch_switch_waits_for_valid_catalog_and_keeps_last_known_good(
 ) -> None:
     clock = Clock()
     old_metadata = metadata("OldWukong.png")
-    new_metadata = metadata("NewWukong.png")
+    new_metadata = metadata("NewWukong.png", version="16.14.1")
     session = Session(
         [
             Response(realm("16.13.1")),
             Response(old_metadata),
             Response(realm("16.14.1")),
-            Response({"data": {}}),
+            Response(
+                {
+                    "type": "champion",
+                    "format": "standAloneComplex",
+                    "version": "16.14.1",
+                    "data": {
+                        "MonkeyKing": {
+                            "id": "MonkeyKing",
+                            "name": "Wukong",
+                            "image": {"full": "PartialWukong.png"},
+                        }
+                    },
+                }
+            ),
             Response(new_metadata),
         ]
     )
@@ -264,6 +326,99 @@ def test_patch_switch_waits_for_valid_catalog_and_keeps_last_known_good(
     cached_realm = json.loads(client.realm_file.read_text(encoding="utf-8"))
     assert cached_realm["n"]["champion"] == "16.14.1"
     assert (tmp_path / "ddragon" / "16.14.1" / "champion.json").exists()
+
+
+def test_mismatched_catalog_version_never_replaces_last_known_good(tmp_path: Path) -> None:
+    clock = Clock()
+    session = Session(
+        [
+            Response(realm("16.13.1")),
+            Response(metadata("Old.png")),
+            Response(realm("16.14.1")),
+            Response(metadata("WrongPatch.png", version="16.13.1")),
+        ]
+    )
+    client = DataDragonClient(
+        tmp_path,
+        logging.getLogger("test"),
+        session,  # type: ignore[arg-type]
+        realm_ttl=5,
+        monotonic=clock.monotonic,
+    )
+
+    assert client.get_metadata()["wukong"] == "Old.png"
+    clock.now += 5
+    assert client.get_metadata()["wukong"] == "Old.png"
+    assert client.get_latest_version() == "16.13.1"
+    assert not (tmp_path / "ddragon" / "16.14.1" / "champion.json").exists()
+
+
+def test_candidate_with_severe_record_shrink_keeps_larger_catalog(tmp_path: Path) -> None:
+    clock = Clock()
+    session = Session(
+        [
+            Response(realm("16.13.1")),
+            Response(metadata("Old.png", count=150)),
+            Response(realm("16.14.1")),
+            Response(metadata("Shrunk.png", version="16.14.1", count=100)),
+            Response(metadata("Recovered.png", version="16.14.1", count=150)),
+        ]
+    )
+    client = DataDragonClient(
+        tmp_path,
+        logging.getLogger("test"),
+        session,  # type: ignore[arg-type]
+        realm_ttl=5,
+        metadata_retry_delay=3,
+        monotonic=clock.monotonic,
+    )
+
+    assert client.get_metadata()["wukong"] == "Old.png"
+    clock.now += 5
+    assert client.get_metadata()["wukong"] == "Old.png"
+    assert client.get_latest_version() == "16.13.1"
+    assert not (tmp_path / "ddragon" / "16.14.1" / "champion.json").exists()
+
+    clock.now += 3
+    assert client.get_metadata()["wukong"] == "Recovered.png"
+    assert client.get_latest_version() == "16.14.1"
+
+
+def test_mostly_malformed_catalog_is_rejected(tmp_path: Path) -> None:
+    payload = metadata(count=120)
+    data = payload["data"]
+    assert isinstance(data, dict)
+    for index, key in enumerate(tuple(data)):
+        if index >= 13:
+            break
+        data[key] = {"id": key, "image": {"full": "../unsafe.png"}}
+    client = DataDragonClient(
+        tmp_path,
+        logging.getLogger("test"),
+        Session([Response(realm()), Response(payload)]),  # type: ignore[arg-type]
+    )
+
+    assert client.get_metadata() == {}
+
+
+def test_cache_write_failures_do_not_discard_valid_network_data(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    session = Session([Response(realm()), Response(metadata()), Response(content=png())])
+    client = DataDragonClient(
+        tmp_path,
+        logging.getLogger("test"),
+        session,  # type: ignore[arg-type]
+    )
+
+    def fail_write(_path: Path, _content: bytes) -> None:
+        raise OSError("read-only cache")
+
+    monkeypatch.setattr(client, "_atomic_write", fail_write)
+
+    portraits = client.get_portraits((RosterMember("Wukong", Role.TOP),))
+    assert portraits["Wukong"].shape == (10, 10, 3)
+    assert client.get_latest_version() == "16.13.1"
 
 
 def test_champion_id_survives_localized_display_name(tmp_path: Path) -> None:
@@ -323,6 +478,18 @@ def test_refresh_intervals_must_be_positive_and_finite(tmp_path: Path) -> None:
             pass
         else:
             raise AssertionError(f"realm_ttl={value!r} should be rejected")
+
+        try:
+            DataDragonClient(
+                tmp_path,
+                logging.getLogger("test"),
+                Session([]),  # type: ignore[arg-type]
+                realm_retry_delay=value,
+            )
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"realm_retry_delay={value!r} should be rejected")
 
         try:
             DataDragonClient(

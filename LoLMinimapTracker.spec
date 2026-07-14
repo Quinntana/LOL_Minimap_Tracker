@@ -6,7 +6,6 @@ from PyInstaller.utils.hooks import collect_data_files
 
 project_root = Path(SPECPATH)
 datas = collect_data_files("lol_minimap_tracker")
-datas.append((str(project_root / "config.json"), "."))
 
 analysis = Analysis(
     [str(project_root / "main.py")],

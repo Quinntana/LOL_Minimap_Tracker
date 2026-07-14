@@ -23,5 +23,10 @@
     "file": "position-utility.svg",
     "sha256": "fdbb740a56418806862ad70a49754141e06ab919ffc3a6ba97a0a3b987875e10",
     "source": "https://raw.communitydragon.org/latest/plugins/rcp-fe-lol-champ-select/global/default/svg/position-utility.svg"
+  },
+  "unknown": {
+    "file": "position-unknown.svg",
+    "sha256": "7143d60635b17adf522a8d57f9e7fa63f214f3a2500f4cdeeb814d5dca2158d5",
+    "source": "project-generated"
   }
 }

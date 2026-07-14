@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import logging
+from threading import Event
+from time import perf_counter, sleep
 from typing import Any
 
 import numpy as np
@@ -202,6 +204,183 @@ def test_missing_portrait_is_retried_without_roster_change() -> None:
     engine.poll_roster()
     engine.poll_roster()
     assert portraits.calls == 2
+
+
+def test_blocking_portrait_provider_does_not_delay_activation_or_capture() -> None:
+    entered = Event()
+    release = Event()
+
+    class BlockingPortraits(Portraits):
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def get_portraits(
+            self, members: tuple[RosterMember, ...]
+        ) -> dict[str, np.ndarray[Any, Any]]:
+            self.calls += 1
+            entered.set()
+            release.wait(timeout=5.0)
+            return super().get_portraits(members)
+
+    class CountingFrames(Frames):
+        def __init__(self) -> None:
+            super().__init__()
+            self.capture_calls = 0
+
+        def capture(self) -> np.ndarray[Any, Any]:
+            self.capture_calls += 1
+            return super().capture()
+
+    portraits = BlockingPortraits()
+    frames = CountingFrames()
+    engine = TrackerEngine(
+        TrackerConfig(),
+        Rosters([active(), active(), active()]),
+        portraits,
+        frames,
+        Detector(DetectionFrame((), None)),
+        Timeline(),
+        Clock(),
+        logging.getLogger("test"),
+    )
+
+    try:
+        started = perf_counter()
+        engine.poll_roster()
+        assert perf_counter() - started < 0.25
+        assert entered.wait(timeout=0.25)
+        assert engine.get_snapshot().mode is TrackerMode.ACTIVE
+
+        started = perf_counter()
+        engine.process_frame()
+        assert perf_counter() - started < 0.25
+        assert frames.capture_calls == 1
+
+        # Repeated polls share the one in-flight request; no worker/task pile-up.
+        engine.poll_roster()
+        engine.poll_roster()
+        assert portraits.calls == 1
+    finally:
+        release.set()
+        engine.stop()
+
+
+def test_portrait_loader_discards_stale_results_and_keeps_latest_request() -> None:
+    first_entered = Event()
+    release_first = Event()
+    latest_returned = Event()
+
+    class TransitionPortraits(Portraits):
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, ...]] = []
+
+        def get_portraits(
+            self, members: tuple[RosterMember, ...]
+        ) -> dict[str, np.ndarray[Any, Any]]:
+            names = tuple(member.champion_name for member in members)
+            self.calls.append(names)
+            if names == ("Aatrox",):
+                first_entered.set()
+                release_first.wait(timeout=5.0)
+            portraits = super().get_portraits(members)
+            if names == ("Ahri",):
+                latest_returned.set()
+            return portraits
+
+    portraits = TransitionPortraits()
+    engine = TrackerEngine(
+        TrackerConfig(),
+        Rosters([active("Aatrox"), active("Nami"), active("Ahri")]),
+        portraits,
+        Frames(),
+        Detector(DetectionFrame((), None)),
+        Timeline(),
+        Clock(),
+        logging.getLogger("test"),
+    )
+
+    try:
+        engine.poll_roster()
+        assert first_entered.wait(timeout=0.25)
+        engine.poll_roster()
+        engine.poll_roster()
+        release_first.set()
+        assert latest_returned.wait(timeout=0.5)
+
+        deadline = perf_counter() + 0.5
+        loaded: dict[str, np.ndarray[Any, Any]] = {}
+        while perf_counter() < deadline:
+            loaded = engine.get_portraits()
+            if loaded:
+                break
+            sleep(0.001)
+
+        assert list(loaded) == ["Ahri"]
+        assert portraits.calls == [("Aatrox",), ("Ahri",)]
+    finally:
+        release_first.set()
+        engine.stop()
+
+
+def test_throwing_portrait_provider_keeps_tracking_and_reports_zero_coverage() -> None:
+    class ThrowingPortraits(Portraits):
+        def get_portraits(
+            self, members: tuple[RosterMember, ...]
+        ) -> dict[str, np.ndarray[Any, Any]]:
+            raise OSError("portrait CDN unavailable")
+
+    frames = Frames()
+    engine = TrackerEngine(
+        TrackerConfig(),
+        Rosters([active()]),
+        ThrowingPortraits(),
+        frames,
+        Detector(DetectionFrame((), None)),
+        Timeline(),
+        Clock(),
+        logging.getLogger("test"),
+    )
+
+    engine.poll_roster()
+    engine.process_frame()
+
+    snapshot = engine.get_snapshot()
+    assert snapshot.mode is TrackerMode.ACTIVE
+    assert snapshot.health.status is AnalysisStatus.DEGRADED
+    assert snapshot.health.message == "Portrait coverage incomplete: 1/1 missing"
+    engine.stop()
+
+
+def test_partial_portrait_coverage_reports_exact_missing_count() -> None:
+    members = (
+        RosterMember("Aatrox", Role.TOP),
+        RosterMember("Nami", Role.UTILITY),
+    )
+
+    class PartialPortraits(Portraits):
+        def get_portraits(
+            self, _members: tuple[RosterMember, ...]
+        ) -> dict[str, np.ndarray[Any, Any]]:
+            return {"Aatrox": np.zeros((10, 10, 3), dtype=np.uint8)}
+
+    engine = TrackerEngine(
+        TrackerConfig(),
+        Rosters([RosterResult(RosterStatus.ACTIVE, members)]),
+        PartialPortraits(),
+        Frames(),
+        Detector(DetectionFrame((), None)),
+        Timeline(),
+        Clock(),
+        logging.getLogger("test"),
+    )
+
+    engine.poll_roster()
+    engine.process_frame()
+
+    health = engine.get_snapshot().health
+    assert health.status is AnalysisStatus.DEGRADED
+    assert health.message == "Portrait coverage incomplete: 1/2 missing"
+    engine.stop()
 
 
 def test_portrait_snapshot_is_a_shallow_mapping_copy() -> None:

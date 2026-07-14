@@ -1,5 +1,6 @@
 """League of Legends minimap tracker research package."""
 
+from ._version import __version__
 from .config import CaptureRegion, HotkeyConfig, TrackerConfig
 from .domain.models import (
     AnalysisStatus,
@@ -30,4 +31,5 @@ __all__ = [
     "TrackerConfig",
     "TrackerMode",
     "TrackerSnapshot",
+    "__version__",
 ]

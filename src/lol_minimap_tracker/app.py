@@ -62,6 +62,44 @@ def _flush_research_outputs(
         logger.exception("Could not flush cooldown research events")
 
 
+class _LegacyCaptureRegionMigrator:
+    """Consume one confirmed screen-to-client conversion at most once per run."""
+
+    def __init__(self, enabled: bool) -> None:
+        self._pending = enabled
+
+    @property
+    def pending(self) -> bool:
+        return self._pending
+
+    def persist_if_ready(
+        self,
+        current: TrackerConfig,
+        confirmed_client_region: CaptureRegion | None,
+        persist: Callable[[TrackerConfig], bool],
+    ) -> bool | None:
+        """Return the save result, or ``None`` when no migration was attempted."""
+        if not self._pending:
+            return None
+        if current.capture_region_space != "screen":
+            self._pending = False
+            return None
+        if confirmed_client_region is None:
+            return None
+
+        # Consume before writing so an unexpected persistence exception cannot
+        # turn the polling timer into a repeated write loop.  A failed atomic
+        # save remains eligible for migration on the next application start.
+        self._pending = False
+        return persist(
+            replace(
+                current,
+                capture=confirmed_client_region,
+                capture_region_space="client",
+            )
+        )
+
+
 def run() -> int:
     dpi_coordinates_are_physical = enable_process_dpi_awareness()
     paths = AppPaths.discover()
@@ -214,6 +252,33 @@ def run() -> int:
                 QSystemTrayIcon.Warning,
             )
         return saved
+
+    capture_migration = _LegacyCaptureRegionMigrator(
+        isinstance(frame_source, LeagueWindowFrameSource)
+        and config.capture_region_space == "screen"
+    )
+    capture_migration_timer = QTimer()
+
+    def persist_converted_capture_region() -> None:
+        if not isinstance(frame_source, LeagueWindowFrameSource):
+            capture_migration_timer.stop()
+            return
+        result = capture_migration.persist_if_ready(
+            config_state,
+            frame_source.confirmed_client_region,
+            persist,
+        )
+        if capture_migration.pending:
+            return
+        capture_migration_timer.stop()
+        if result:
+            logger.info(
+                "Migrated the confirmed minimap region from screen to League-client coordinates"
+            )
+
+    if capture_migration.pending:
+        capture_migration_timer.timeout.connect(persist_converted_capture_region)
+        capture_migration_timer.start(250)
 
     def toggle_arrows() -> bool:
         state = overlay.toggle_arrows()
@@ -467,6 +532,7 @@ def run() -> int:
         if cleanup_started:
             return
         cleanup_started = True
+        capture_migration_timer.stop()
         selector.close()
         cooldown_panel.shutdown()
         cooldown_store.clear_all()

@@ -6,7 +6,7 @@ import logging
 from collections.abc import Mapping
 from dataclasses import dataclass
 from math import hypot
-from threading import Event, RLock
+from threading import Condition, Event, RLock, Thread, current_thread
 
 from ..config import TrackerConfig
 from ..domain.identity import assign_identities
@@ -43,6 +43,118 @@ class _PendingObservation:
     required_frames: int
 
 
+@dataclass(frozen=True)
+class _PortraitRequest:
+    generation: int
+    members: tuple[RosterMember, ...]
+
+    @property
+    def key(self) -> tuple[int, tuple[str, ...]]:
+        return self.generation, tuple(member.champion_name for member in self.members)
+
+
+@dataclass(frozen=True)
+class _PortraitResponse:
+    generation: int
+    requested_names: tuple[str, ...]
+    portraits: Mapping[str, Image]
+    error: str | None = None
+
+
+class _AsyncPortraitLoader:
+    """Single daemon worker with latest-request and latest-response bounds."""
+
+    def __init__(self, provider: PortraitProvider) -> None:
+        self._provider = provider
+        self._condition = Condition()
+        self._pending: _PortraitRequest | None = None
+        self._inflight: _PortraitRequest | None = None
+        self._response: _PortraitResponse | None = None
+        self._thread: Thread | None = None
+        self._stopping = False
+
+    def request(self, request: _PortraitRequest) -> bool:
+        with self._condition:
+            if self._stopping:
+                return False
+            if self._inflight is not None and self._inflight.key == request.key:
+                return False
+            if self._pending is not None and self._pending.key == request.key:
+                return False
+
+            # A patch/roster transition may happen while the provider is blocked.
+            # Keep only the newest queued request instead of growing an executor queue.
+            self._pending = request
+            if self._thread is None or not self._thread.is_alive():
+                self._thread = Thread(
+                    target=self._run,
+                    name="portrait-loader",
+                    daemon=True,
+                )
+                self._thread.start()
+            self._condition.notify_all()
+            return True
+
+    def take_response(self, timeout: float = 0.0) -> _PortraitResponse | None:
+        with self._condition:
+            if self._response is None and timeout > 0.0 and not self._stopping:
+                self._condition.wait_for(
+                    lambda: self._response is not None or self._stopping,
+                    timeout=timeout,
+                )
+            response = self._response
+            self._response = None
+            return response
+
+    def close(self, join_timeout: float = 0.0) -> None:
+        with self._condition:
+            self._stopping = True
+            self._pending = None
+            thread = self._thread
+            self._condition.notify_all()
+        if join_timeout > 0.0 and thread is not None and thread is not current_thread():
+            # A third-party/network provider may be permanently stuck. The worker is
+            # a daemon, so shutdown is bounded even when it cannot cooperate.
+            thread.join(timeout=join_timeout)
+
+    def _run(self) -> None:
+        while True:
+            with self._condition:
+                self._condition.wait_for(lambda: self._pending is not None or self._stopping)
+                if self._stopping:
+                    return
+                request = self._pending
+                self._pending = None
+                self._inflight = request
+            if request is None:  # pragma: no cover - guarded by the condition predicate
+                continue
+
+            requested_names = tuple(member.champion_name for member in request.members)
+            try:
+                portraits = dict(self._provider.get_portraits(request.members))
+                response = _PortraitResponse(
+                    request.generation,
+                    requested_names,
+                    portraits,
+                )
+            except Exception as exc:
+                response = _PortraitResponse(
+                    request.generation,
+                    requested_names,
+                    {},
+                    f"{type(exc).__name__}: {exc}",
+                )
+
+            with self._condition:
+                self._inflight = None
+                if self._stopping:
+                    return
+                # Results are consumed opportunistically by roster/frame/UI calls.
+                # A newer completion supersedes an older unconsumed completion.
+                self._response = response
+                self._condition.notify_all()
+
+
 class FrameProcessingError(RuntimeError):
     def __init__(self, phase: str, cause: Exception) -> None:
         super().__init__(f"{phase} failed: {cause}")
@@ -51,6 +163,9 @@ class FrameProcessingError(RuntimeError):
 
 
 class TrackerEngine:
+    _PORTRAIT_FAST_PATH_TIMEOUT_SECONDS = 0.02
+    _PORTRAIT_SHUTDOWN_TIMEOUT_SECONDS = 0.05
+
     def __init__(
         self,
         config: TrackerConfig,
@@ -65,6 +180,7 @@ class TrackerEngine:
         self.config = config
         self.roster_provider = roster_provider
         self.portrait_provider = portrait_provider
+        self._portrait_loader = _AsyncPortraitLoader(portrait_provider)
         self.frame_source = frame_source
         self.detector = detector
         self.timeline_sink = timeline_sink
@@ -103,6 +219,43 @@ class TrackerEngine:
         self._last_detection = DetectionDiagnostics()
         self._next_capture_recovery = 0.0
 
+    def _consume_portrait_result(self, timeout: float = 0.0) -> None:
+        response = self._portrait_loader.take_response(timeout)
+        if response is None:
+            return
+        with self._lock:
+            current_generation = self._roster_generation
+        if response.generation != current_generation:
+            return
+        if response.error is not None:
+            self.logger.warning("Portrait loading failed: %s", response.error)
+            return
+        with self._lock:
+            # The generation may have advanced between the checks above.
+            if response.generation != self._roster_generation:
+                return
+            active_names = {member.champion_name for member in self._roster_members}
+            requested_names = set(response.requested_names)
+            accepted = {
+                name: portrait
+                for name, portrait in response.portraits.items()
+                if name in active_names and name in requested_names
+            }
+            if accepted:
+                self._portraits = {**self._portraits, **accepted}
+
+    def _request_portraits(self, members: tuple[RosterMember, ...]) -> None:
+        if not members:
+            return
+        with self._lock:
+            generation = self._roster_generation
+        scheduled = self._portrait_loader.request(_PortraitRequest(generation, members))
+        # Preserve the immediate fast-cache behavior without ever waiting on a
+        # network/filesystem provider for more than this small, fixed budget.
+        self._consume_portrait_result(
+            self._PORTRAIT_FAST_PATH_TIMEOUT_SECONDS if scheduled else 0.0
+        )
+
     @staticmethod
     def _signature(members: tuple[RosterMember, ...]) -> tuple[tuple[str, ...], ...]:
         signature: list[tuple[str, ...]] = []
@@ -139,6 +292,7 @@ class TrackerEngine:
         self._last_detection = DetectionDiagnostics()
 
     def poll_roster(self) -> None:
+        self._consume_portrait_result()
         polled_at = self.clock.monotonic()
         result = self.roster_provider.poll()
         if result.status is RosterStatus.ACTIVE:
@@ -147,18 +301,17 @@ class TrackerEngine:
                 roster_changed = signature != self._roster_signature
             if roster_changed:
                 identities = assign_identities(result.members)
-                portraits = self.portrait_provider.get_portraits(result.members)
                 with self._lock:
                     self._clear_match()
                     self._roster_generation += 1
                     self._roster_signature = signature
                     self._roster_members = result.members
                     self._identities = identities
-                    self._portraits = portraits
                     self._message = "Tracking " + ", ".join(
                         identity.champion_name for identity in identities
                     )
                 self.logger.info(self._message)
+                missing = result.members
             else:
                 with self._lock:
                     self._roster_members = result.members
@@ -168,16 +321,13 @@ class TrackerEngine:
                         for member in result.members
                         if member.champion_name not in self._portraits
                     )
-                if missing:
-                    recovered = self.portrait_provider.get_portraits(missing)
-                    with self._lock:
-                        self._portraits = {**self._portraits, **recovered}
             with self._lock:
                 self._roster_status = RosterStatus.ACTIVE
                 self._missing_polls = 0
                 self._last_api_success = polled_at
                 self._api_failures = 0
                 self._api_error = None
+            self._request_portraits(missing)
             return
 
         with self._lock:
@@ -218,6 +368,10 @@ class TrackerEngine:
         api_age = (
             max(0.0, now - self._last_api_success) if self._last_api_success is not None else None
         )
+        missing_portraits = sum(
+            identity.champion_name not in self._portraits for identity in self._identities
+        )
+        portrait_total = len(self._identities)
         if not self._identities:
             status = AnalysisStatus.WARMING_UP
             message = "Waiting for live frames"
@@ -229,6 +383,9 @@ class TrackerEngine:
         elif self._last_frame_completed is None and self._consecutive_failures > 0:
             status = AnalysisStatus.DEGRADED
             message = self._last_error or "Waiting for a valid capture"
+        elif self._last_frame_completed is None and missing_portraits > 0:
+            status = AnalysisStatus.DEGRADED
+            message = f"Portrait coverage incomplete: {missing_portraits}/{portrait_total} missing"
         elif self._last_frame_completed is None:
             status = AnalysisStatus.WARMING_UP
             message = "Waiting for live frames"
@@ -248,6 +405,9 @@ class TrackerEngine:
         ):
             status = AnalysisStatus.DEGRADED
             message = self._last_error or self._api_error or "Live analysis delayed"
+        elif missing_portraits > 0:
+            status = AnalysisStatus.DEGRADED
+            message = f"Portrait coverage incomplete: {missing_portraits}/{portrait_total} missing"
         else:
             status = AnalysisStatus.HEALTHY
             diagnostics = self._last_detection
@@ -281,6 +441,7 @@ class TrackerEngine:
         )
 
     def get_snapshot(self) -> TrackerSnapshot:
+        self._consume_portrait_result()
         now = self.clock.monotonic()
         with self._lock:
             champions: list[ChampionView] = []
@@ -310,6 +471,7 @@ class TrackerEngine:
 
     def get_portraits(self) -> dict[str, Image]:
         """Return a thread-safe shallow copy for read-only overlay rendering."""
+        self._consume_portrait_result()
         with self._lock:
             return dict(self._portraits)
 
@@ -420,6 +582,7 @@ class TrackerEngine:
             self._api_error = f"Live Client failure: {error}"
 
     def process_frame(self) -> None:
+        self._consume_portrait_result()
         started = self.clock.monotonic()
         try:
             frame = self.frame_source.capture()
@@ -466,6 +629,7 @@ class TrackerEngine:
 
     def stop(self) -> None:
         self._stop.set()
+        self._portrait_loader.close()
 
     def _recover_capture_if_needed(self, now: float) -> None:
         with self._lock:
@@ -534,6 +698,7 @@ class TrackerEngine:
                     wait_seconds = min(0.5, self.config.roster_refresh_interval_seconds)
                 self._stop.wait(wait_seconds)
         finally:
+            self._portrait_loader.close(self._PORTRAIT_SHUTDOWN_TIMEOUT_SECONDS)
             try:
                 self.frame_source.close()
             except Exception:
