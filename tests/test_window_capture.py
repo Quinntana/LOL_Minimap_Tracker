@@ -192,9 +192,6 @@ def test_window_frame_source_copies_bgr_crop_and_tracks_moved_window() -> None:
     assert source.screen_region == CaptureRegion(top=220, left=120, width=3, height=2)
     assert source.game_client_center == (290, 335)
 
-    cached = source.capture()
-    assert np.array_equal(cached, first)
-
     finder.current = geometry(
         frame_left=290,
         frame_top=380,
@@ -249,6 +246,31 @@ def test_window_frame_source_times_out_and_never_falls_back_to_desktop() -> None
 
     assert session.control.stop_calls == 1
     assert session.control.wait_calls == 1
+
+
+def test_window_frame_source_restarts_when_the_last_frame_goes_stale() -> None:
+    frozen = FakeSession(colored_frame((1, 2, 3)))
+    recovered = FakeSession(colored_frame((7, 8, 9)))
+    factory = FakeFactory([frozen, recovered])
+    source = LeagueWindowFrameSource(
+        CaptureRegion(top=220, left=120, width=3, height=2),
+        finder=FakeFinder(geometry()),
+        capture_factory=factory,
+        timeout_seconds=0.01,
+    )
+    source.start()
+
+    first = source.capture()
+    assert np.all(first == np.array([1, 2, 3], dtype=np.uint8))
+    with pytest.raises(CaptureUnavailableError, match="Timed out waiting for a new"):
+        source.capture()
+
+    assert frozen.control.stop_calls == 1
+    assert frozen.control.wait_calls == 1
+    next_frame = source.capture()
+    assert np.all(next_frame == np.array([7, 8, 9], dtype=np.uint8))
+    assert factory.hwnds == [44, 44]
+    source.close()
 
 
 def test_window_frame_source_recovers_after_capture_item_closes() -> None:

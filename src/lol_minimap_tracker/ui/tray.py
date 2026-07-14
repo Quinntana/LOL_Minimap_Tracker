@@ -20,6 +20,7 @@ from ..config import CaptureRegion, TrackerConfig
 from ..domain.models import (
     AffinityResult,
     AffinityStatus,
+    ArrowDisplayMode,
     LastSeenMarkerStyle,
     TrackerSnapshot,
 )
@@ -63,6 +64,26 @@ class TrayController:
         self._add_toggle(
             self.menu, "Direction arrows", "toggle_arrows", config.show_arrows, dispatch
         )
+        self.arrow_mode_menu = cast(QMenu, self.menu.addMenu("Arrow range"))
+        self.arrow_mode_menu.setToolTipsVisible(True)
+        self.arrow_mode_actions: dict[ArrowDisplayMode, QAction] = {}
+        self.arrow_mode_group = QActionGroup(self.arrow_mode_menu)
+        self.arrow_mode_group.setExclusive(True)
+        self._add_arrow_mode(
+            "Nearby threats only (default)",
+            ArrowDisplayMode.NEARBY,
+            "set_arrow_mode_nearby",
+            "Hides enemies farther than the configured nearby range.",
+            dispatch,
+        )
+        self._add_arrow_mode(
+            "All tracked enemies",
+            ArrowDisplayMode.ALL,
+            "set_arrow_mode_all",
+            "Shows every positioned enemy; nearby enemies still receive longer arrows.",
+            dispatch,
+        )
+        self.update_arrow_mode(config.arrow_display_mode)
         self._add_toggle(
             self.menu,
             "Missing-enemy markers",
@@ -76,19 +97,19 @@ class TrayController:
         self.marker_style_group = QActionGroup(self.marker_style_menu)
         self.marker_style_group.setExclusive(True)
         self._add_marker_style(
-            "Champion portrait + X (default)",
-            LastSeenMarkerStyle.PORTRAIT,
-            "set_marker_style_portrait",
-            "Faded champion portrait with a red X. Requires League-window capture "
-            "or active capture exclusion.",
-            dispatch,
-        )
-        self._add_marker_style(
-            "Role icon",
+            "Role icon (default)",
             LastSeenMarkerStyle.ROLE,
             "set_marker_style_role",
             "Compact tinted role symbol. Requires League-window capture or active "
             "capture exclusion.",
+            dispatch,
+        )
+        self._add_marker_style(
+            "Faded champion portrait",
+            LastSeenMarkerStyle.PORTRAIT,
+            "set_marker_style_portrait",
+            "Recognizable portrait with a thin dashed missing ring. Requires League-window capture "
+            "or active capture exclusion.",
             dispatch,
         )
         self._add_marker_style(
@@ -193,6 +214,22 @@ class TrayController:
         self.marker_style_menu.addAction(action)
         self.marker_style_actions[style] = action
 
+    def _add_arrow_mode(
+        self,
+        label: str,
+        mode: ArrowDisplayMode,
+        name: str,
+        tooltip: str,
+        dispatch: Callable[[str], None],
+    ) -> None:
+        action = QAction(label, self.arrow_mode_menu)
+        action.setCheckable(True)
+        action.setToolTip(tooltip)
+        action.triggered.connect(lambda _checked=False, key=name: dispatch(key))
+        self.arrow_mode_group.addAction(action)
+        self.arrow_mode_menu.addAction(action)
+        self.arrow_mode_actions[mode] = action
+
     @staticmethod
     def _add_command(menu: QMenu, label: str, name: str, dispatch: Callable[[str], None]) -> None:
         action = QAction(label, menu)
@@ -234,6 +271,14 @@ class TrayController:
             LastSeenMarkerStyle.DOT: "Minimal dot",
         }
         self.marker_style_menu.setTitle(f"Missing marker: {labels[style]}")
+
+    def update_arrow_mode(self, mode: ArrowDisplayMode) -> None:
+        action = self.arrow_mode_actions.get(mode)
+        if action is None:
+            return
+        action.setChecked(True)
+        label = "Nearby threats" if mode is ArrowDisplayMode.NEARBY else "All enemies"
+        self.arrow_mode_menu.setTitle(f"Arrow range: {label}")
 
     def update_region(self, region: CaptureRegion) -> None:
         self.region_action.setText(

@@ -278,6 +278,17 @@ class CooldownDataDragonClient:
         data = cls._mapping(root.get("data")) if root is not None else None
         return bool(data)
 
+    @classmethod
+    def _valid_champion_catalog(cls, payload: object) -> bool:
+        return cls._valid_catalog(payload) and bool(cls._index_champions(payload))
+
+    @classmethod
+    def _valid_summoner_catalog(cls, payload: object) -> bool:
+        if not cls._valid_catalog(payload):
+            return False
+        by_id, _by_name = cls._index_summoners(payload)
+        return bool(by_id)
+
     def _ensure_loaded(self) -> None:
         if self._loaded or self._cancelled.is_set():
             return
@@ -307,7 +318,7 @@ class CooldownDataDragonClient:
         champion_payload = self._load_json(
             champion_url,
             champion_path,
-            self._valid_catalog,
+            self._valid_champion_catalog,
             "champion cooldown metadata",
             cache_first=True,
         )
@@ -323,7 +334,7 @@ class CooldownDataDragonClient:
         summoner_payload = self._load_json(
             summoner_url,
             summoner_path,
-            self._valid_catalog,
+            self._valid_summoner_catalog,
             "summoner spell metadata",
             cache_first=True,
         )
@@ -331,6 +342,9 @@ class CooldownDataDragonClient:
             return
         champions = self._index_champions(champion_payload)
         summoners_by_id, summoners_by_name = self._index_summoners(summoner_payload)
+        if not champions or not summoners_by_id:
+            self.logger.warning("Data Dragon catalogs contained no indexable records")
+            return
         self._realm_info = realm_info
         self._champions = champions
         self._summoners_by_id = summoners_by_id

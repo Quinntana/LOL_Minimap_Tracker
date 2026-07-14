@@ -7,6 +7,7 @@ import os
 import sys
 import threading
 import uuid
+from collections.abc import Callable
 from dataclasses import asdict, replace
 from typing import Any
 
@@ -16,7 +17,12 @@ from PyQt5.QtWidgets import QApplication, QSystemTrayIcon
 
 from .config import CaptureRegion, TrackerConfig, ensure_config, load_config, save_config
 from .domain.cooldowns import CooldownTimerStore
-from .domain.models import AffinityResult, AffinityStatus, LastSeenMarkerStyle
+from .domain.models import (
+    AffinityResult,
+    AffinityStatus,
+    ArrowDisplayMode,
+    LastSeenMarkerStyle,
+)
 from .integrations.affinity import WindowsDisplayAffinityController
 from .integrations.capture import LeagueWindowFrameSource, MssFrameSource
 from .integrations.clickthrough import WindowsOverlayInputController
@@ -37,6 +43,23 @@ from .ui.cooldown_panel import CooldownPanel
 from .ui.overlay import TransparentOverlay
 from .ui.role_icons import RoleIconRenderer
 from .ui.tray import ActionBridge, TrayController
+
+
+def _flush_research_outputs(
+    flush_timeline: Callable[[], None],
+    flush_cooldowns: Callable[[], None],
+    logger: logging.Logger,
+) -> None:
+    """Flush both research streams without one failure suppressing the other."""
+
+    try:
+        flush_timeline()
+    except OSError:
+        logger.exception("Could not flush timeline research events")
+    try:
+        flush_cooldowns()
+    except OSError:
+        logger.exception("Could not flush cooldown research events")
 
 
 def run() -> int:
@@ -197,6 +220,12 @@ def run() -> int:
         persist(replace(config_state, show_arrows=state))
         return state
 
+    def set_arrow_display_mode(mode: ArrowDisplayMode) -> None:
+        overlay.set_arrow_display_mode(mode)
+        persist(replace(config_state, arrow_display_mode=mode))
+        if tray is not None:
+            tray.update_arrow_mode(mode)
+
     def toggle_last_seen() -> bool:
         state = overlay.toggle_last_seen()
         persist(replace(config_state, show_last_seen=state))
@@ -339,6 +368,8 @@ def run() -> int:
         "save_timeline": engine.flush_timeline,
         "quit": app.quit,
         "toggle_arrows": toggle_arrows,
+        "set_arrow_mode_nearby": lambda: set_arrow_display_mode(ArrowDisplayMode.NEARBY),
+        "set_arrow_mode_all": lambda: set_arrow_display_mode(ArrowDisplayMode.ALL),
         "pause": engine.toggle_pause,
         "toggle_last_seen": toggle_last_seen,
         "set_marker_style_portrait": lambda: set_last_seen_marker_style(
@@ -421,16 +452,13 @@ def run() -> int:
         status_timer.timeout.connect(update_status)
         status_timer.start(500)
 
-    cooldown_flush_timer = QTimer()
+    research_flush_timer = QTimer()
 
-    def flush_cooldown_events() -> None:
-        try:
-            cooldown_events.flush()
-        except OSError:
-            logger.exception("Could not flush cooldown research events")
+    def flush_research_outputs() -> None:
+        _flush_research_outputs(engine.flush_timeline, cooldown_events.flush, logger)
 
-    cooldown_flush_timer.timeout.connect(flush_cooldown_events)
-    cooldown_flush_timer.start(5000)
+    research_flush_timer.timeout.connect(flush_research_outputs)
+    research_flush_timer.start(5000)
 
     cleanup_started = False
 
@@ -445,11 +473,7 @@ def run() -> int:
         engine.stop()
         hotkeys.stop()
         tracker_thread.join(timeout=2.0)
-        try:
-            engine.flush_timeline()
-        except OSError:
-            logger.exception("Could not flush timeline during shutdown")
-        flush_cooldown_events()
+        flush_research_outputs()
         instance_lock.unlock()
 
     app.aboutToQuit.connect(cleanup)

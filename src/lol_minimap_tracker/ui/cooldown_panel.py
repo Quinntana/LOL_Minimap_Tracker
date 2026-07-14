@@ -178,6 +178,9 @@ class CooldownIconButton(QAbstractButton):
         self._can_start = key is not None and duration is not None
         self.setCursor(Qt.PointingHandCursor if self._can_start else Qt.ArrowCursor)
         self.setToolTip(self._tooltip(duration))
+        accessible_name = definition.display_name if definition is not None else self.slot.value
+        self.setAccessibleName(accessible_name)
+        self.setAccessibleDescription(self.toolTip())
         self.update()
 
     @staticmethod
@@ -268,10 +271,11 @@ class CooldownEnemyRow(QWidget):
         super().__init__(parent)
         self.member: RosterMember | None = None
         self._champion_icon_path: Path | None = None
+        self._champion_fallback = ""
         self._champion_icon_loaded = False
-        self.setFixedHeight(40)
+        self.setFixedHeight(38)
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(5, 3, 5, 3)
+        layout.setContentsMargins(5, 2, 5, 2)
         layout.setSpacing(4)
         self.champion_icon = QLabel()
         self.champion_icon.setFixedSize(30, 30)
@@ -280,10 +284,6 @@ class CooldownEnemyRow(QWidget):
             "background: #111827; border: 1px solid #4b5563; border-radius: 4px; color: #d1d5db;"
         )
         layout.addWidget(self.champion_icon)
-        self.name_label = QLabel("Waiting")
-        self.name_label.setFixedWidth(75)
-        self.name_label.setStyleSheet("color: #f3f4f6; font-size: 10px;")
-        layout.addWidget(self.name_label)
         self.buttons = {
             slot: CooldownIconButton(slot, self)
             for slot in (
@@ -308,30 +308,40 @@ class CooldownEnemyRow(QWidget):
         if member is None:
             self.champion_icon.clear()
             self.champion_icon.setText("?")
-            self.name_label.setText("Waiting")
+            self.champion_icon.setToolTip("Waiting for enemy roster")
+            self.champion_icon.setAccessibleName("Waiting for enemy roster")
             for button in self.buttons.values():
                 button.set_view(None, None, None, None)
             return
 
         level_text = "?" if member.level is None else str(member.level)
-        self.name_label.setText(f"{member.champion_name}\nLv {level_text}")
-        self.name_label.setToolTip(f"{member.champion_name}, enemy level {level_text}")
-        self._set_champion_icon(loadout.champion_icon_path if loadout else None)
+        identity_text = f"{member.champion_name} — level {level_text}"
+        self.champion_icon.setToolTip(identity_text)
+        self.champion_icon.setAccessibleName(identity_text)
+        fallback = "".join(character for character in member.champion_name if character.isalnum())[
+            :2
+        ].upper()
+        self._set_champion_icon(loadout.champion_icon_path if loadout else None, fallback or "?")
         participant_id = member.participant_id or member.champion_name.casefold()
         for slot, button in self.buttons.items():
             key = CooldownKey(participant_id, slot)
             definition = loadout.definition_for(slot) if loadout is not None else None
             button.set_view(key, definition, timers.get(key), member.level)
 
-    def _set_champion_icon(self, path: Path | None) -> None:
-        if self._champion_icon_loaded and path == self._champion_icon_path:
+    def _set_champion_icon(self, path: Path | None, fallback: str) -> None:
+        if (
+            self._champion_icon_loaded
+            and path == self._champion_icon_path
+            and fallback == self._champion_fallback
+        ):
             return
         self._champion_icon_path = path
+        self._champion_fallback = fallback
         self._champion_icon_loaded = True
         pixmap = QPixmap(str(path)) if path is not None and path.exists() else QPixmap()
         if pixmap.isNull():
             self.champion_icon.setPixmap(QPixmap())
-            self.champion_icon.setText("?")
+            self.champion_icon.setText(fallback)
             return
         self.champion_icon.setText("")
         self.champion_icon.setPixmap(
@@ -378,6 +388,8 @@ class CooldownPanel(QWidget):
         self._shutting_down = False
         self._drag_offset: QPoint | None = None
         self._roster_generation: int | None = None
+        self._confirmed_roster_identity: tuple[tuple[str, str], ...] = ()
+        self._last_confirmed_members: tuple[RosterMember, ...] = ()
         self._members: tuple[RosterMember, ...] = ()
         self._loadout_signature: tuple[tuple[str, ...], ...] = ()
         self._catalog_revision = 0
@@ -400,22 +412,19 @@ class CooldownPanel(QWidget):
         )
         self.setAttribute(Qt.WA_ShowWithoutActivating)
         self.setFocusPolicy(Qt.NoFocus)
-        self.setFixedSize(246, 232)
+        self.setFixedSize(160, 218)
         self.setStyleSheet("background: #0b1220;")
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(0, 0, 0, 2)
+        outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
         header = QWidget(self)
-        header.setFixedHeight(30)
+        header.setFixedHeight(28)
         header.setObjectName("cooldownHeader")
         header.setStyleSheet(
             "#cooldownHeader { background: #172033; border-bottom: 1px solid #334155; }"
         )
         header_layout = QHBoxLayout(header)
-        header_layout.setContentsMargins(7, 3, 4, 3)
-        self.title_label = QLabel("BASE CD • MANUAL")
-        self.title_label.setStyleSheet("color: #dbeafe; font-weight: 600; font-size: 10px;")
-        header_layout.addWidget(self.title_label)
+        header_layout.setContentsMargins(5, 3, 3, 3)
         header_layout.addStretch(1)
         self.lock_button = QPushButton("Lock" if not self._locked else "Unlock")
         self.lock_button.setFixedSize(48, 22)
@@ -517,18 +526,29 @@ class CooldownPanel(QWidget):
             return
         state = self.roster_provider()
         ordered_members = self._ordered(state.members)
+        roster_identity = self._roster_identity(ordered_members)
+        loadout_signature = self._metadata_signature(ordered_members)
         generation_changed = state.generation != self._roster_generation
+        same_confirmed_roster = bool(ordered_members) and (
+            roster_identity == self._confirmed_roster_identity
+        )
         if generation_changed:
             self._roster_generation = state.generation
-            session_id = (
-                f"{self._session_prefix}-{state.generation}"
-                if self._session_prefix
-                else str(state.generation)
-            )
-            self.timer_store.reset_session(session_id)
-        loadout_signature = self._metadata_signature(ordered_members)
+            # A temporarily empty roster is how the engine represents a Live
+            # Client outage after its grace period. Keep the manual timers so a
+            # short local-API interruption cannot erase the user's clicks. An
+            # actually different confirmed roster establishes a new session.
+            if ordered_members and not same_confirmed_roster:
+                session_id = (
+                    f"{self._session_prefix}-{state.generation}"
+                    if self._session_prefix
+                    else str(state.generation)
+                )
+                self.timer_store.reset_session(session_id)
         if loadout_signature != self._loadout_signature:
-            if not generation_changed:
+            if same_confirmed_roster and generation_changed:
+                self._clear_changed_spell_timers(self._last_confirmed_members, ordered_members)
+            elif not generation_changed:
                 self._clear_changed_spell_timers(self._members, ordered_members)
             self._loadout_signature = loadout_signature
             self._catalog_revision += 1
@@ -537,6 +557,9 @@ class CooldownPanel(QWidget):
             self._catalog_retry_failures = 0
             self._catalog_retry_at = 0.0
             self._queue_loadouts(self._catalog_revision, ordered_members)
+        if ordered_members:
+            self._confirmed_roster_identity = roster_identity
+            self._last_confirmed_members = ordered_members
         self._members = ordered_members
         self._collect_loadouts()
         if (
@@ -563,6 +586,18 @@ class CooldownPanel(QWidget):
                     member.participant_id,
                 ),
             )[:5]
+        )
+
+    @staticmethod
+    def _roster_identity(
+        members: tuple[RosterMember, ...],
+    ) -> tuple[tuple[str, str], ...]:
+        return tuple(
+            (
+                member.participant_id or member.champion_name.casefold(),
+                (member.champion_id or member.champion_name).casefold(),
+            )
+            for member in members
         )
 
     @staticmethod
@@ -615,7 +650,7 @@ class CooldownPanel(QWidget):
                     if new_reference is not None
                     else ""
                 )
-                if old_identity != new_identity:
+                if old_identity and new_identity and old_identity != new_identity:
                     self.timer_store.clear(CooldownKey(participant_id, slot))
 
     def _queue_loadouts(self, revision: int, members: tuple[RosterMember, ...]) -> None:

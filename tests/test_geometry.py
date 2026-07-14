@@ -6,13 +6,12 @@ from lol_minimap_tracker.domain.models import (
     Role,
 )
 from lol_minimap_tracker.ui.geometry import (
+    arrow_display_length,
     arrow_range_color,
     marker_dot_offsets,
     marker_icon_offsets,
     normalized_map_distance,
-    rectangles_intersect,
     segment_intersects_rect,
-    status_origin,
 )
 
 
@@ -23,13 +22,6 @@ def view(name: str, position: tuple[int, int], age: float) -> ChampionView:
         False,
         age,
     )
-
-
-def test_status_panel_avoids_minimap_on_negative_virtual_desktop() -> None:
-    screen = (-1920, 0, 3840, 1080)
-    minimap = (1655, 813, 252, 252)
-    x, y = status_origin(screen, minimap, 5)
-    assert not rectangles_intersect((x, y, 260, 110), minimap)
 
 
 def test_coincident_dots_fan_out_deterministically() -> None:
@@ -109,9 +101,12 @@ def test_distance_arrow_colors_are_resolution_independent() -> None:
     assert normalized_map_distance(50, 200, 100) == 0.5
 
 
-def test_status_origin_returns_least_overlap_when_map_fills_screen() -> None:
-    screen = (0, 0, 300, 200)
-    minimap = (0, 0, 300, 200)
-    x, y = status_origin(screen, minimap, 5, panel_width=100, row_height=20)
-    assert 0 <= x <= 200
-    assert 0 <= y <= 100
+def test_arrow_length_is_longer_for_nearby_threats_and_scales_with_map() -> None:
+    close = arrow_display_length(15, 100, 100)
+    medium = arrow_display_length(35, 100, 100)
+    far = arrow_display_length(55, 100, 100)
+    assert close == 48.0
+    assert close > medium > far
+    assert round(far, 6) == 14.0
+    assert arrow_display_length(70, 200, 200) == medium * 2
+    assert arrow_display_length(-1, 100, 100) == close

@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import tempfile
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-from .domain.models import LastSeenMarkerStyle
+from .domain.models import ArrowDisplayMode, LastSeenMarkerStyle
 
 
 @dataclass(frozen=True)
@@ -60,8 +61,10 @@ class TrackerConfig:
     exclude_overlay_from_capture: bool = True
     enable_global_hotkeys: bool = True
     show_arrows: bool = True
+    arrow_display_mode: ArrowDisplayMode = ArrowDisplayMode.NEARBY
+    arrow_nearby_range_ratio: float = 0.35
     show_last_seen: bool = True
-    last_seen_marker_style: LastSeenMarkerStyle = LastSeenMarkerStyle.PORTRAIT
+    last_seen_marker_style: LastSeenMarkerStyle = LastSeenMarkerStyle.ROLE
     show_notifications: bool = True
     cooldown_tracker_enabled: bool = False
     cooldown_panel_locked: bool = False
@@ -96,6 +99,11 @@ def _number(
 ) -> int | float:
     value = values.get(key, default)
     valid = isinstance(value, (int, float)) and not isinstance(value, bool)
+    if valid:
+        try:
+            valid = math.isfinite(float(value))
+        except (OverflowError, TypeError, ValueError):
+            valid = False
     if valid and minimum is not None:
         valid = value >= minimum
     if valid and maximum is not None:
@@ -142,10 +150,10 @@ def config_from_mapping(values: dict[str, Any], logger: logging.Logger) -> Track
     )
 
     capture = CaptureRegion(
-        top=int(_number(flat_capture, "top", 813, logger)),
-        left=int(_number(flat_capture, "left", 1655, logger)),
-        width=int(_number(flat_capture, "width", 252, logger, 1)),
-        height=int(_number(flat_capture, "height", 252, logger, 1)),
+        top=int(_number(flat_capture, "top", 813, logger, -1_000_000, 1_000_000)),
+        left=int(_number(flat_capture, "left", 1655, logger, -1_000_000, 1_000_000)),
+        width=int(_number(flat_capture, "width", 252, logger, 1, 65_536)),
+        height=int(_number(flat_capture, "height", 252, logger, 1, 65_536)),
     )
     radius_min = int(_number(values, "circle_radius_min", 12, logger, 1))
     radius_max = int(_number(values, "circle_radius_max", 40, logger, 1))
@@ -182,18 +190,27 @@ def config_from_mapping(values: dict[str, Any], logger: logging.Logger) -> Track
         logger.warning("Invalid league_process_name=%r; using default", league_process_name)
         league_process_name = "League of Legends.exe"
 
-    raw_marker_style = values.get("last_seen_marker_style", LastSeenMarkerStyle.PORTRAIT.value)
+    raw_arrow_mode = values.get("arrow_display_mode", ArrowDisplayMode.NEARBY.value)
+    try:
+        if not isinstance(raw_arrow_mode, str):
+            raise ValueError
+        arrow_display_mode = ArrowDisplayMode(raw_arrow_mode)
+    except ValueError:
+        logger.warning("Invalid arrow_display_mode=%r; using nearby", raw_arrow_mode)
+        arrow_display_mode = ArrowDisplayMode.NEARBY
+
+    raw_marker_style = values.get("last_seen_marker_style", LastSeenMarkerStyle.ROLE.value)
     if raw_marker_style == "ring":
-        logger.warning("Legacy last_seen_marker_style='ring'; using portrait")
-        marker_style = LastSeenMarkerStyle.PORTRAIT
+        logger.warning("Legacy last_seen_marker_style='ring'; using role")
+        marker_style = LastSeenMarkerStyle.ROLE
     else:
         try:
             if not isinstance(raw_marker_style, str):
                 raise ValueError
             marker_style = LastSeenMarkerStyle(raw_marker_style)
         except ValueError:
-            logger.warning("Invalid last_seen_marker_style=%r; using portrait", raw_marker_style)
-            marker_style = LastSeenMarkerStyle.PORTRAIT
+            logger.warning("Invalid last_seen_marker_style=%r; using role", raw_marker_style)
+            marker_style = LastSeenMarkerStyle.ROLE
 
     return TrackerConfig(
         capture=capture,
@@ -243,6 +260,10 @@ def config_from_mapping(values: dict[str, Any], logger: logging.Logger) -> Track
         exclude_overlay_from_capture=_boolean(values, "exclude_overlay_from_capture", True, logger),
         enable_global_hotkeys=_boolean(values, "enable_global_hotkeys", True, logger),
         show_arrows=_boolean(values, "show_arrows", True, logger),
+        arrow_display_mode=arrow_display_mode,
+        arrow_nearby_range_ratio=float(
+            _number(values, "arrow_nearby_range_ratio", 0.35, logger, 0.05, 1.0)
+        ),
         show_last_seen=_boolean(values, "show_last_seen", True, logger),
         last_seen_marker_style=marker_style,
         show_notifications=_boolean(values, "show_notifications", True, logger),

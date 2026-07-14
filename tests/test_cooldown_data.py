@@ -345,12 +345,21 @@ def test_champion_id_is_used_before_display_name(tmp_path: Path) -> None:
     assert loadout.ultimate.identifier == "MonkeyKingR"
 
 
-def test_unknown_and_incomplete_records_return_disabled_placeholders(tmp_path: Path) -> None:
+def test_unknown_member_and_incomplete_records_return_disabled_placeholders(
+    tmp_path: Path,
+) -> None:
+    champions, summoners = standard_catalogs()
+    champion_data = champions["data"]
+    summoner_data = summoners["data"]
+    assert isinstance(champion_data, dict)
+    assert isinstance(summoner_data, dict)
+    champion_data["Broken"] = "not-a-record"
+    summoner_data["Broken"] = "not-a-record"
     session = Session(
         {
             REALM_URL: [Response(realm_payload())],
-            CHAMPION_URL: [Response({"data": {"Broken": "not-a-record"}})],
-            SUMMONER_URL: [Response({"data": {"Broken": "not-a-record"}})],
+            CHAMPION_URL: [Response(champions)],
+            SUMMONER_URL: [Response(summoners)],
         }
     )
     roster_member = member(
@@ -413,6 +422,39 @@ def test_transient_initial_failure_retries_and_recovers(tmp_path: Path) -> None:
     (loadout,) = client.get_loadouts((member(),))
     assert loadout.ultimate.identifier == "MonkeyKingR"
     assert session.calls.count(REALM_URL) == 2
+
+
+def test_malformed_nonempty_catalogs_are_not_cached_as_loaded_and_retry(
+    tmp_path: Path,
+) -> None:
+    champions, summoners = standard_catalogs()
+    session = Session(
+        {
+            REALM_URL: [Response(realm_payload()), Response(realm_payload())],
+            CHAMPION_URL: [
+                Response({"data": {"Broken": "not-a-record"}}),
+                Response(champions),
+            ],
+            SUMMONER_URL: [
+                Response({"data": {"Broken": "not-a-record"}}),
+                Response(summoners),
+            ],
+            f"{CDN}/{CHAMPION_VERSION}/img/champion/MonkeyKing.png": [Response(content=PNG)],
+            f"{CDN}/{CHAMPION_VERSION}/img/spell/MonkeyKingR.png": [Response(content=PNG)],
+            f"{CDN}/{SUMMONER_VERSION}/img/spell/SummonerFlash.png": [Response(content=PNG)],
+            f"{CDN}/{SUMMONER_VERSION}/img/spell/SummonerHeal.png": [Response(content=PNG)],
+        }
+    )
+    client = CooldownDataDragonClient(tmp_path, logging.getLogger("test"), session)
+
+    with pytest.raises(CooldownMetadataUnavailable):
+        client.get_loadouts((member(),))
+
+    (loadout,) = client.get_loadouts((member(),))
+
+    assert loadout.ultimate.identifier == "MonkeyKingR"
+    assert session.calls.count(CHAMPION_URL) == 2
+    assert session.calls.count(SUMMONER_URL) == 2
 
 
 def test_cancel_prevents_new_network_and_cache_work(tmp_path: Path) -> None:

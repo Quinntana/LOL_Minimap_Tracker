@@ -14,17 +14,19 @@ from ..domain.interfaces import DisplayAffinityController, Image, OverlayInputCo
 from ..domain.models import (
     AffinityResult,
     AffinityStatus,
+    ArrowDisplayMode,
     ChampionView,
     LastSeenMarkerStyle,
     TrackerSnapshot,
 )
 from .champion_portraits import ChampionPortraitRenderer
 from .geometry import (
+    arrow_display_length,
     arrow_range_color,
     marker_dot_offsets,
     marker_icon_offsets,
+    normalized_map_distance,
     segment_intersects_rect,
-    status_origin,
 )
 from .role_icons import RoleIconRenderer
 
@@ -61,6 +63,8 @@ class TransparentOverlay(QMainWindow):
         self.snapshot = TrackerSnapshot()
         self.capture_region = config.capture
         self.show_arrows = config.show_arrows
+        self.arrow_display_mode = config.arrow_display_mode
+        self.arrow_nearby_range_ratio = config.arrow_nearby_range_ratio
         self.show_last_seen = config.show_last_seen
         self.last_seen_marker_style = config.last_seen_marker_style
         self.affinity_result = AffinityResult(AffinityStatus.FAILED)
@@ -144,6 +148,10 @@ class TransparentOverlay(QMainWindow):
         self.update()
         return self.show_last_seen
 
+    def set_arrow_display_mode(self, mode: ArrowDisplayMode) -> None:
+        self.arrow_display_mode = mode
+        self.update()
+
     def set_last_seen_marker_style(self, style: LastSeenMarkerStyle) -> None:
         self.last_seen_marker_style = style
         self.update()
@@ -199,38 +207,6 @@ class TransparentOverlay(QMainWindow):
             center.y() - self._virtual_geometry.top(),
         )
 
-    def _draw_status(self, painter: QPainter) -> None:
-        screen = (
-            self._virtual_geometry.left(),
-            self._virtual_geometry.top(),
-            self._virtual_geometry.width(),
-            self._virtual_geometry.height(),
-        )
-        x_global, y_global = status_origin(
-            screen, self._map_rect_global(), len(self.snapshot.champions)
-        )
-        x = x_global - self._virtual_geometry.left()
-        y = y_global - self._virtual_geometry.top()
-        for index, champion in enumerate(self.snapshot.champions):
-            row_y = y + index * 22
-            icon = self.icons.render(champion.identity.role_icon, champion.identity.color, 16)
-            painter.drawPixmap(x, row_y + 2, icon)
-            painter.setPen(QColor(champion.identity.color))
-            name_x = x + 21
-            painter.drawText(name_x, row_y + 16, champion.identity.champion_name)
-            name_width = painter.fontMetrics().horizontalAdvance(champion.identity.champion_name)
-            if champion.is_current:
-                status = " - visible"
-                status_color = QColor(235, 235, 235, 235)
-            elif champion.position is not None and champion.seconds_since_seen is not None:
-                status = f" - last seen {champion.seconds_since_seen:.1f}s ago"
-                status_color = QColor(215, 215, 215, 230)
-            else:
-                status = " - not seen"
-                status_color = QColor(180, 180, 180, 220)
-            painter.setPen(status_color)
-            painter.drawText(name_x + name_width, row_y + 16, status)
-
     def _draw_arrows(self, painter: QPainter) -> None:
         if not self.show_arrows or self.snapshot.camera_center is None:
             return
@@ -249,7 +225,29 @@ class TransparentOverlay(QMainWindow):
             dx = champion.position[0] - self.snapshot.camera_center[0]
             dy = champion.position[1] - self.snapshot.camera_center[1]
             distance = math.hypot(dx, dy)
-            end = start[0] + dx, start[1] + dy
+            if distance < 1.0:
+                continue
+            if (
+                self.arrow_display_mode is ArrowDisplayMode.NEARBY
+                and normalized_map_distance(
+                    distance,
+                    self.capture_region.width,
+                    self.capture_region.height,
+                )
+                > self.arrow_nearby_range_ratio
+            ):
+                continue
+            unit_x = dx / distance
+            unit_y = dy / distance
+            display_length = arrow_display_length(
+                distance,
+                self.capture_region.width,
+                self.capture_region.height,
+            )
+            end = (
+                round(start[0] + unit_x * display_length),
+                round(start[1] + unit_y * display_length),
+            )
             if not graphics_safe and segment_intersects_rect(start, end, map_tuple):
                 continue
             red, green, blue = arrow_range_color(
@@ -259,18 +257,18 @@ class TransparentOverlay(QMainWindow):
             )
             color = QColor(red, green, blue, 240)
             line_style = Qt.SolidLine if champion.is_current else Qt.DashLine
-            pen = QPen(color, 3, line_style)
-            label = champion.identity.champion_name
-            label_color = QColor(245, 247, 250, 235)
+            pen = QPen(color)
+            pen.setWidthF(1.4)
+            pen.setStyle(line_style)
+            pen.setCapStyle(Qt.RoundCap)
+            pen.setJoinStyle(Qt.RoundJoin)
             painter.setPen(pen)
             painter.drawLine(start[0], start[1], end[0], end[1])
-            if distance >= 5:
-                unit_x = dx / distance
-                unit_y = dy / distance
+            if display_length >= 8:
                 perpendicular_x = -unit_y
                 perpendicular_y = unit_x
-                head_length = min(distance, 8.0, max(5.0, distance * 0.25))
-                head_width = min(distance / 2, 5.0, max(3.0, distance * 0.16))
+                head_length = min(7.0, max(4.0, display_length * 0.12))
+                head_width = min(3.5, max(2.5, display_length * 0.06))
                 base_x = end[0] - unit_x * head_length
                 base_y = end[1] - unit_y * head_length
                 painter.drawLine(
@@ -285,20 +283,8 @@ class TransparentOverlay(QMainWindow):
                     round(base_x - perpendicular_x * head_width),
                     round(base_y - perpendicular_y * head_width),
                 )
-            painter.setPen(label_color)
-            painter.drawText(end[0] + 5, end[1] - 5, label)
         if not graphics_safe:
             painter.restore()
-
-    @staticmethod
-    def _draw_missing_cross(painter: QPainter, x: int, y: int) -> None:
-        radius = 7
-        painter.save()
-        for color, width in ((QColor(8, 8, 8, 235), 4), (QColor(239, 68, 68, 250), 2)):
-            painter.setPen(QPen(color, width, Qt.SolidLine, Qt.RoundCap))
-            painter.drawLine(x - radius, y - radius, x + radius, y + radius)
-            painter.drawLine(x + radius, y - radius, x - radius, y + radius)
-        painter.restore()
 
     @staticmethod
     def _draw_dot_marker(painter: QPainter, champion: ChampionView, x: int, y: int) -> None:
@@ -330,20 +316,22 @@ class TransparentOverlay(QMainWindow):
     ) -> None:
         portrait = self.portraits.get(champion.identity.champion_name)
         if portrait is None:
-            self._draw_dot_marker(painter, champion, x, y)
             return
         pixmap = self.portrait_renderer.render(champion.identity.champion_name, portrait, 20)
         if pixmap.isNull():
-            self._draw_dot_marker(painter, champion, x, y)
             return
         painter.save()
-        painter.setOpacity(0.52)
+        painter.setOpacity(0.68)
         painter.drawPixmap(x - 10, y - 10, pixmap)
         painter.restore()
         painter.setBrush(Qt.NoBrush)
-        painter.setPen(QPen(QColor(champion.identity.color), 1))
+        painter.setPen(QPen(QColor(8, 8, 8, 225), 3))
         painter.drawEllipse(QRect(x - 10, y - 10, 20, 20))
-        self._draw_missing_cross(painter, x, y)
+        missing_pen = QPen(QColor(248, 113, 113, 245))
+        missing_pen.setWidthF(1.4)
+        missing_pen.setStyle(Qt.DashLine)
+        painter.setPen(missing_pen)
+        painter.drawEllipse(QRect(x - 10, y - 10, 20, 20))
 
     def _draw_markers(self, painter: QPainter) -> None:
         if not self.show_last_seen:
@@ -387,10 +375,5 @@ class TransparentOverlay(QMainWindow):
         del event
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
-        if self._in_map_graphics_safe():
-            painter.setPen(QPen(QColor(255, 0, 0, 180), 1))
-            painter.setBrush(Qt.NoBrush)
-            painter.drawRect(self._map_rect_local())
-        self._draw_status(painter)
         self._draw_arrows(painter)
         self._draw_markers(painter)

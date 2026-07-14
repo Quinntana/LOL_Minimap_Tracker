@@ -5,7 +5,7 @@ import time
 from threading import Event
 from typing import Any
 
-from PyQt5.QtCore import QPoint, Qt
+from PyQt5.QtCore import QPoint, QSize, Qt
 from PyQt5.QtTest import QTest
 
 from lol_minimap_tracker.domain.cooldowns import (
@@ -115,7 +115,7 @@ def test_panel_is_interactive_compact_and_capture_excluded(qapp: Any) -> None:
     assert not panel.windowFlags() & Qt.WindowTransparentForInput
     assert not panel.testAttribute(Qt.WA_TransparentForMouseEvents)
     assert panel.windowFlags() & Qt.WindowDoesNotAcceptFocus
-    assert panel.width() < 300
+    assert panel.size() == QSize(160, 218)
     assert [row.member.champion_name for row in panel.rows[:2] if row.member] == [
         "Aatrox",
         "Nami",
@@ -123,6 +123,11 @@ def test_panel_is_interactive_compact_and_capture_excluded(qapp: Any) -> None:
     assert len(panel.rows) == 5
     assert panel.timer_store.session_id == "process-a-1"
     assert panel.rows[2].member is None
+    assert not hasattr(panel, "title_label")
+    assert not hasattr(panel.rows[0], "name_label")
+    assert panel.rows[0].champion_icon.text() == "AA"
+    assert panel.rows[0].champion_icon.toolTip() == "Aatrox — level 11"
+    assert panel.rows[0].champion_icon.accessibleName() == "Aatrox — level 11"
     panel.shutdown()
     panel.close()
 
@@ -193,9 +198,22 @@ def test_unsupported_slot_ignores_left_click_and_explains_reason(qapp: Any) -> N
     panel.close()
 
 
-def test_roster_generation_resets_timers_and_discards_old_rows(qapp: Any) -> None:
+def test_empty_roster_and_identical_recovery_preserve_timers(qapp: Any) -> None:
     members, loadouts = fixture_data()
-    state = {"value": RosterState(1, members)}
+    tracked_members = tuple(
+        RosterMember(
+            member.champion_name,
+            member.role,
+            member.participant_id,
+            level=member.level,
+            summoner_spells=(
+                SummonerSpellRef("SummonerFlash", "Flash"),
+                SummonerSpellRef("SummonerDot", "Ignite"),
+            ),
+        )
+        for member in members
+    )
+    state = {"value": RosterState(1, tracked_members)}
     store = CooldownTimerStore(Clock())
     panel = CooldownPanel(
         lambda: state["value"],
@@ -208,12 +226,27 @@ def test_roster_generation_resets_timers_and_discards_old_rows(qapp: Any) -> Non
     )
     panel.show()
     settle(panel, qapp)
-    QTest.mouseClick(panel.rows[0].buttons[CooldownSlot.ULTIMATE], Qt.LeftButton)
+    QTest.mouseClick(panel.rows[0].buttons[CooldownSlot.SPELL_ONE], Qt.LeftButton)
     assert len(store) == 1
     state["value"] = RosterState(2, ())
     panel.refresh()
-    assert len(store) == 0
+    assert len(store) == 1
     assert all(row.member is None for row in panel.rows)
+    # The same roster can briefly recover before optional spell fields do.
+    state["value"] = RosterState(3, members)
+    panel.refresh()
+    assert len(store) == 1
+    assert store.session_id == "1"
+    state["value"] = RosterState(3, tracked_members)
+    panel.refresh()
+    assert len(store) == 1
+    state["value"] = RosterState(
+        4,
+        (RosterMember("Ahri", Role.MIDDLE, "middle", level=11),),
+    )
+    panel.refresh()
+    assert len(store) == 0
+    assert store.session_id == "4"
     panel.shutdown()
     panel.close()
 
@@ -286,6 +319,7 @@ def test_same_match_spell_refresh_reloads_metadata_and_clears_only_changed_slot(
     assert store.snapshot(CooldownKey("top", CooldownSlot.SPELL_ONE)) is not None
     assert store.snapshot(CooldownKey("top", CooldownSlot.SPELL_TWO)) is None
     assert panel.rows[0].buttons[CooldownSlot.SPELL_TWO].definition.identifier == "SummonerBarrier"
+    assert panel.rows[0].champion_icon.toolTip() == "Aatrox — level 12"
     panel.shutdown()
     panel.close()
 

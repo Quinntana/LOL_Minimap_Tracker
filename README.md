@@ -16,16 +16,18 @@ Live Client Data API. It does not modify game files or process memory.
 
 ## Overlay identity
 
-Every enemy receives a stable, colorblind-conscious color for the match. The same
-color is used for the champion name outside the minimap and the selected last-seen
-marker. Missing enemies with a known prior position use a compact faded champion
-portrait with a centered red X by default. A standalone tinted role icon and a minimal
-color dot fallback are available as isolated manual alternatives.
+Every enemy receives a stable, colorblind-conscious color for the match. The overlay
+does not render a persistent roster/status legend. Missing enemies with a known prior
+position use a compact tinted role icon by default. A recognizable faded champion
+portrait with a thin dashed missing ring and a minimal color-dot fallback remain
+available as manual alternatives.
 
 Direction arrows encode camera-relative range without relying on a number:
 
 - Red, amber, or green carries the distance warning for both live and last-seen positions.
 - Solid means currently detected; dashed means the arrow uses a last-seen position.
+- Nearby threats produce longer arrows. The default nearby-only mode omits distant
+  enemies; an all-enemies mode remains available from the tray.
 
 ## Real-time analysis safeguards
 
@@ -51,6 +53,8 @@ The confidence, movement, health, and recovery values are configurable in
 - `league_process_name`: exact game executable used for window discovery.
 - `window_capture_timeout_seconds`: maximum wait for a fresh game-window frame.
 - `last_seen_marker_style`: persisted manual choice of `portrait`, `role`, or `dot`.
+- `arrow_display_mode`: `nearby` (default) or `all`.
+- `arrow_nearby_range_ratio`: maximum normalized camera distance shown in nearby mode.
 - `ssim_margin`: required separation from the second-best portrait score.
 - `confirmation_frames`: normal consecutive-frame requirement.
 - `confirmation_position_tolerance_pixels`: maximum movement within a confirmation run.
@@ -63,10 +67,17 @@ The confidence, movement, health, and recovery values are configurable in
 
 ## Private cooldown research panel
 
-The development-only cooldown panel is a separate compact, interactive window; the
-minimap overlay remains fully click-through. It displays each enemy champion,
-ultimate, and two summoner-spell icons. Left-click starts or restarts a timer and
-right-click clears it. Enemy level selects the ordinary ultimate rank at levels
+> [!WARNING]
+> Riot's current [Game Integrity policy](https://developer.riotgames.com/docs/lol#game-integrity)
+> lists automatic or manual enemy ultimate cooldown tracking as prohibited. This panel is
+> disabled by default. Review the current policy and obtain any required Riot approval before
+> distribution or live-game use.
+
+The development-only cooldown panel is a separate compact, interactive icon-only
+window; the minimap overlay remains fully click-through. It displays each enemy
+champion portrait, ultimate, and two summoner-spell icons without persistent names or
+level text. Identity and level remain in the portrait tooltip. Left-click starts or
+restarts a timer and right-click clears it. Enemy level selects the ordinary ultimate rank at levels
 6/11/16, with explicit handling for supported nonstandard rank layouts. Summoner
 spells use their patch-static base cooldown.
 
@@ -137,11 +148,12 @@ capture and rendering and are saved atomically.
 
 The primary menu is focused on live play:
 
-- `Direction arrows`: red-to-green distance color for every arrow; solid means currently
-  detected and dashed means last seen.
+- `Direction arrows`: toggles thin danger-scaled arrows; solid means currently detected
+  and dashed means last seen.
+- `Arrow range`: selects nearby threats only (default) or all positioned enemies.
 - `Missing-enemy markers`: shows or hides last confirmed missing-enemy positions.
-- `Missing marker`: manually selects champion portrait + X (default), role icon, or
-  minimal identity-color dot. Rich modes require isolated capture; dot is the
+- `Missing marker`: manually selects role icon (default), faded portrait with a dashed
+  missing ring, or minimal identity-color dot. Rich modes require isolated capture; dot is the
   desktop-capture fallback.
 - `Pause detection`: stops new capture and analysis until resumed.
 - `Select minimap area...`: recalibrates the capture rectangle across all displays.
@@ -150,7 +162,7 @@ Timeline recording, configuration access, and the data folder are under `Advance
 Left-clicking the notification-area icon opens the same menu as right-clicking it.
 The overlay uses native top-level input transparency and never accepts focus, so all
 map markers remain click-through.
-Arrow, marker visibility/style, notification, and capture-region preferences persist
+Arrow visibility/range, marker visibility/style, notification, and capture-region preferences persist
 between runs.
 
 Runtime data is written to `%LOCALAPPDATA%\LoLMinimapTracker`:

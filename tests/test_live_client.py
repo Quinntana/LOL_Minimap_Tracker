@@ -59,6 +59,31 @@ def test_active_roster_uses_riot_id_team_and_roles() -> None:
     ]
 
 
+def test_players_without_a_nonblank_team_are_not_treated_as_opponents() -> None:
+    players = [
+        {"riotId": "Me#TAG", "team": "ORDER", "championName": "Lux"},
+        {"riotId": "Unknown#1", "championName": "Aatrox", "position": "TOP"},
+        {
+            "riotId": "Unknown#2",
+            "team": "   ",
+            "championName": "Nami",
+            "position": "SUPPORT",
+        },
+        {
+            "riotId": "Enemy#1",
+            "team": "CHAOS",
+            "championName": "Ahri",
+            "position": "MIDDLE",
+        },
+    ]
+    client = LiveClientClient(1, logging.getLogger("test"), Session(["Me#TAG", players]))  # type: ignore[arg-type]
+
+    result = client.poll()
+
+    assert result.status is RosterStatus.ACTIVE
+    assert [member.champion_name for member in result.members] == ["Ahri"]
+
+
 def test_full_live_schema_parses_privacy_safe_cooldown_fields() -> None:
     players = [
         {"riotId": "Me#TAG", "team": "ORDER", "championName": "Lux"},

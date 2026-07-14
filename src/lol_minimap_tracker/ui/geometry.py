@@ -31,46 +31,14 @@ ARROW_FAR_RATIO = 0.55
 ARROW_CLOSE_COLOR = (239, 68, 68)
 ARROW_MEDIUM_COLOR = (245, 158, 11)
 ARROW_FAR_COLOR = (34, 197, 94)
+ARROW_CLOSE_LENGTH_RATIO = 0.48
+ARROW_FAR_LENGTH_RATIO = 0.14
 
 
 def rectangles_intersect(first: RectTuple, second: RectTuple) -> bool:
     ax, ay, aw, ah = first
     bx, by, bw, bh = second
     return ax < bx + bw and ax + aw > bx and ay < by + bh and ay + ah > by
-
-
-def status_origin(
-    screen: RectTuple,
-    minimap: RectTuple,
-    row_count: int,
-    panel_width: int = 260,
-    row_height: int = 22,
-    margin: int = 10,
-) -> tuple[int, int]:
-    sx, sy, sw, sh = screen
-    mx, my, mw, mh = minimap
-    panel_height = max(row_height, row_count * row_height)
-    candidates = (
-        (mx - panel_width - margin, my),
-        (mx + mw + margin, my),
-        (mx, my - panel_height - margin),
-        (mx, my + mh + margin),
-        (sx + margin, sy + margin),
-    )
-    best = (sx + margin, sy + margin)
-    best_overlap = float("inf")
-    for candidate_x, candidate_y in candidates:
-        x = max(sx + margin, min(candidate_x, sx + sw - panel_width - margin))
-        y = max(sy + margin, min(candidate_y, sy + sh - panel_height - margin))
-        panel = (x, y, panel_width, panel_height)
-        if not rectangles_intersect(panel, minimap):
-            return x, y
-        ix = max(0, min(x + panel_width, mx + mw) - max(x, mx))
-        iy = max(0, min(y + panel_height, my + mh) - max(y, my))
-        overlap = ix * iy
-        if overlap < best_overlap:
-            best, best_overlap = (x, y), overlap
-    return best
 
 
 def _marker_offsets(
@@ -207,6 +175,22 @@ def arrow_range_color(
     else:
         color = _interpolate_color(ARROW_MEDIUM_COLOR, ARROW_FAR_COLOR, (amount - 0.5) * 2)
     return color
+
+
+def arrow_display_length(distance: float, map_width: int, map_height: int) -> float:
+    """Return an inverse-distance arrow length so nearby enemies read as more urgent."""
+
+    side = max(1, min(map_width, map_height))
+    ratio = normalized_map_distance(distance, map_width, map_height)
+    range_amount = max(
+        0.0,
+        min(1.0, (ratio - ARROW_CLOSE_RATIO) / (ARROW_FAR_RATIO - ARROW_CLOSE_RATIO)),
+    )
+    length_ratio = (
+        ARROW_CLOSE_LENGTH_RATIO
+        + (ARROW_FAR_LENGTH_RATIO - ARROW_CLOSE_LENGTH_RATIO) * range_amount
+    )
+    return side * length_ratio
 
 
 def segment_intersects_rect(

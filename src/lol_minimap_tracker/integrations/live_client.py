@@ -139,16 +139,24 @@ class LiveClientClient:
             ),
             None,
         )
-        if not isinstance(active_player, dict) or not active_player.get("team"):
+        if not isinstance(active_player, dict):
             return RosterResult(
                 RosterStatus.INVALID_RESPONSE,
                 error="Active player was not present in playerlist",
             )
 
-        my_team = active_player["team"]
+        my_team = _clean_string(active_player.get("team"))
+        if my_team is None:
+            return RosterResult(
+                RosterStatus.INVALID_RESPONSE,
+                error="Active player did not have a valid team",
+            )
         members: list[RosterMember] = []
         for player in players:
-            if not isinstance(player, dict) or player.get("team") == my_team:
+            if not isinstance(player, dict):
+                continue
+            player_team = _clean_string(player.get("team"))
+            if player_team is None or player_team == my_team:
                 continue
             champion_name = _clean_string(player.get("championName"))
             if champion_name is not None:

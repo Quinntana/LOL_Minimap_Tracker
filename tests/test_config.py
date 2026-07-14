@@ -15,7 +15,7 @@ from lol_minimap_tracker.config import (
     load_config,
     save_config,
 )
-from lol_minimap_tracker.domain.models import LastSeenMarkerStyle
+from lol_minimap_tracker.domain.models import ArrowDisplayMode, LastSeenMarkerStyle
 
 
 def test_config_loads_flat_capture_and_nested_hotkeys(tmp_path: Path) -> None:
@@ -54,6 +54,8 @@ def test_config_rejects_invalid_values(caplog: object) -> None:
             "log_level": "LOUD",
             "exclude_overlay_from_capture": "false",
             "show_arrows": 1,
+            "arrow_display_mode": "everywhere",
+            "arrow_nearby_range_ratio": 2,
             "show_last_seen": "yes",
             "last_seen_marker_style": "sparkle",
             "show_notifications": None,
@@ -92,8 +94,10 @@ def test_config_rejects_invalid_values(caplog: object) -> None:
     assert config.log_level == "INFO"
     assert config.exclude_overlay_from_capture is True
     assert config.show_arrows is True
+    assert config.arrow_display_mode is ArrowDisplayMode.NEARBY
+    assert config.arrow_nearby_range_ratio == 0.35
     assert config.show_last_seen is True
-    assert config.last_seen_marker_style is LastSeenMarkerStyle.PORTRAIT
+    assert config.last_seen_marker_style is LastSeenMarkerStyle.ROLE
     assert config.show_notifications is True
     assert config.cooldown_tracker_enabled is False
     assert config.cooldown_panel_locked is False
@@ -147,18 +151,32 @@ def test_desktop_capture_rejects_client_relative_coordinates() -> None:
     assert config.capture_region_space == "client"
 
 
-def test_legacy_ring_marker_style_migrates_to_portrait() -> None:
+def test_legacy_ring_marker_style_migrates_to_role() -> None:
     config = config_from_mapping(
         {"last_seen_marker_style": "ring"},
         logging.getLogger("test"),
     )
-    assert config.last_seen_marker_style is LastSeenMarkerStyle.PORTRAIT
+    assert config.last_seen_marker_style is LastSeenMarkerStyle.ROLE
 
 
 def test_malformed_json_uses_defaults(tmp_path: Path) -> None:
     path = tmp_path / "config.json"
     path.write_text("{broken", encoding="utf-8")
     assert load_config(path, logging.getLogger("test")) == DEFAULT_CONFIG
+
+
+def test_nonfinite_and_extreme_numbers_cannot_crash_or_escape_bounds(tmp_path: Path) -> None:
+    path = tmp_path / "config.json"
+    path.write_text(
+        '{"width": 1e309, "top": 1e100, "ssim_threshold": 1e309}',
+        encoding="utf-8",
+    )
+
+    loaded = load_config(path, logging.getLogger("test"))
+
+    assert loaded.capture.width == DEFAULT_CONFIG.capture.width
+    assert loaded.capture.top == DEFAULT_CONFIG.capture.top
+    assert loaded.ssim_threshold == DEFAULT_CONFIG.ssim_threshold
 
 
 def test_default_config_bootstrap_and_preference_round_trip(tmp_path: Path) -> None:
@@ -172,8 +190,10 @@ def test_default_config_bootstrap_and_preference_round_trip(tmp_path: Path) -> N
         DEFAULT_CONFIG,
         capture=CaptureRegion(top=-100, left=-1800, width=320, height=280),
         show_arrows=False,
+        arrow_display_mode=ArrowDisplayMode.ALL,
+        arrow_nearby_range_ratio=0.42,
         show_last_seen=False,
-        last_seen_marker_style=LastSeenMarkerStyle.ROLE,
+        last_seen_marker_style=LastSeenMarkerStyle.PORTRAIT,
         show_notifications=False,
         cooldown_tracker_enabled=True,
         cooldown_panel_locked=True,
@@ -182,8 +202,10 @@ def test_default_config_bootstrap_and_preference_round_trip(tmp_path: Path) -> N
     )
     assert save_config(path, updated, logger)
     assert load_config(path, logger) == updated
-    assert json.loads(path.read_text(encoding="utf-8"))["last_seen_marker_style"] == "role"
+    assert json.loads(path.read_text(encoding="utf-8"))["last_seen_marker_style"] == "portrait"
     payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["arrow_display_mode"] == "all"
+    assert payload["arrow_nearby_range_ratio"] == 0.42
     assert payload["cooldown_tracker_enabled"] is True
     assert payload["cooldown_panel_left"] == -1700
 

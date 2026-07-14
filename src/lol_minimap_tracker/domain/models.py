@@ -56,6 +56,11 @@ class LastSeenMarkerStyle(StrEnum):
     DOT = "dot"
 
 
+class ArrowDisplayMode(StrEnum):
+    NEARBY = "nearby"
+    ALL = "all"
+
+
 class AnalysisStatus(StrEnum):
     WARMING_UP = "warming_up"
     HEALTHY = "healthy"

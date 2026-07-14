@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from typing import Any
 
 import numpy as np
@@ -12,6 +13,7 @@ from lol_minimap_tracker.config import CaptureRegion, TrackerConfig
 from lol_minimap_tracker.domain.models import (
     AffinityResult,
     AffinityStatus,
+    ArrowDisplayMode,
     ChampionView,
     EnemyIdentity,
     LastSeenMarkerStyle,
@@ -109,7 +111,10 @@ def test_overlay_renders_safe_and_fallback_modes(qapp: Any) -> None:
     }
     overlay = TransparentOverlay(
         snapshot_provider=lambda: current,
-        config=TrackerConfig(capture=region),
+        config=TrackerConfig(
+            capture=region,
+            last_seen_marker_style=LastSeenMarkerStyle.PORTRAIT,
+        ),
         icons=RoleIconRenderer(AppPaths.discover().role_asset_dir),
         affinity_controller=Affinity(),
         affinity_changed=changed.append,
@@ -140,11 +145,11 @@ def test_overlay_renders_safe_and_fallback_modes(qapp: Any) -> None:
     marker_y = region.top - overlay._virtual_geometry.top() + 80
     current_x = region.left - overlay._virtual_geometry.left() + 30
     current_y = region.top - overlay._virtual_geometry.top() + 40
-    missing_cross = image.pixelColor(marker_x, marker_y)
-    faded_portrait = image.pixelColor(marker_x, marker_y - 5)
+    portrait_center = image.pixelColor(marker_x, marker_y)
+    missing_ring = image.pixelColor(marker_x + 9, marker_y)
     assert overlay.last_seen_marker_style is LastSeenMarkerStyle.PORTRAIT
-    assert missing_cross.red() > missing_cross.green()
-    assert faded_portrait.blue() > faded_portrait.red()
+    assert portrait_center.blue() > portrait_center.red()
+    assert missing_ring.red() > missing_ring.green()
     assert image.pixelColor(marker_x + 12, marker_y + 12).alpha() == 0
     assert image.pixelColor(current_x, current_y).alpha() == 0
 
@@ -181,8 +186,7 @@ def test_overlay_renders_safe_and_fallback_modes(qapp: Any) -> None:
     portrait_fallback = QImage(overlay.size(), QImage.Format_ARGB32_Premultiplied)
     portrait_fallback.fill(0)
     overlay.render(portrait_fallback)
-    assert portrait_fallback.pixelColor(marker_x, marker_y).alpha() > 0
-    assert portrait_fallback.pixelColor(marker_x + 4, marker_y).alpha() == 0
+    assert portrait_fallback.pixelColor(marker_x, marker_y).alpha() == 0
 
     isolated["value"] = False
     overlay.set_last_seen_marker_style(LastSeenMarkerStyle.DOT)
@@ -242,6 +246,7 @@ def test_overlay_arrows_use_range_colors_and_game_window_origin(qapp: Any) -> No
         def __init__(self) -> None:
             self.current_pen = QPen()
             self.line_pens: list[QPen] = []
+            self.lines: list[tuple[object, ...]] = []
             self.labels: list[str] = []
 
         def setPen(self, pen: QPen | QColor) -> None:
@@ -249,6 +254,7 @@ def test_overlay_arrows_use_range_colors_and_game_window_origin(qapp: Any) -> No
 
         def drawLine(self, *_coordinates: object) -> None:
             self.line_pens.append(QPen(self.current_pen))
+            self.lines.append(_coordinates)
 
         def drawText(self, *_arguments: object) -> None:
             self.labels.append(str(_arguments[-1]))
@@ -281,7 +287,10 @@ def test_overlay_arrows_use_range_colors_and_game_window_origin(qapp: Any) -> No
     current_painter = RecordingPainter()
     overlay._draw_arrows(current_painter)  # type: ignore[arg-type]
     assert current_painter.line_pens[0].style() == Qt.SolidLine
-    assert current_painter.labels == ["Aatrox"]
+    assert current_painter.line_pens[0].widthF() == 1.4
+    assert current_painter.labels == []
+    close_line = current_painter.lines[0]
+    close_length = abs(float(close_line[2]) - float(close_line[0]))
     close_image = QImage(overlay.size(), QImage.Format_ARGB32_Premultiplied)
     close_image.fill(0)
     overlay.render(close_image)
@@ -293,13 +302,23 @@ def test_overlay_arrows_use_range_colors_and_game_window_origin(qapp: Any) -> No
         camera_center=(50, 50),
     )
     overlay.snapshot = state["snapshot"]
+    nearby_far_painter = RecordingPainter()
+    overlay._draw_arrows(nearby_far_painter)  # type: ignore[arg-type]
+    assert nearby_far_painter.lines == []
+    overlay.set_arrow_display_mode(ArrowDisplayMode.ALL)
     far_painter = RecordingPainter()
     overlay._draw_arrows(far_painter)  # type: ignore[arg-type]
     assert far_painter.line_pens[0].color().green() > far_painter.line_pens[0].color().red()
+    far_line = far_painter.lines[0]
+    far_length = math.hypot(
+        float(far_line[2]) - float(far_line[0]),
+        float(far_line[3]) - float(far_line[1]),
+    )
+    assert close_length > far_length
     far_image = QImage(overlay.size(), QImage.Format_ARGB32_Premultiplied)
     far_image.fill(0)
     overlay.render(far_image)
-    far_pixel = far_image.pixelColor(origin_local[0] + 20, origin_local[1] + 20)
+    far_pixel = far_image.pixelColor(origin_local[0] + 5, origin_local[1] + 5)
     assert far_pixel.green() > far_pixel.red()
 
     state["snapshot"] = TrackerSnapshot(
@@ -311,7 +330,7 @@ def test_overlay_arrows_use_range_colors_and_game_window_origin(qapp: Any) -> No
     overlay._draw_arrows(stale_painter)  # type: ignore[arg-type]
     assert stale_painter.line_pens[0].style() == Qt.DashLine
     assert stale_painter.line_pens[0].color().red() > stale_painter.line_pens[0].color().green()
-    assert stale_painter.labels == ["Aatrox"]
+    assert stale_painter.labels == []
     stale_image = QImage(overlay.size(), QImage.Format_ARGB32_Premultiplied)
     stale_image.fill(0)
     overlay.render(stale_image)
@@ -419,6 +438,12 @@ def test_tray_updates_and_dispatches(qapp: Any) -> None:
     assert dispatched == ["toggle_arrows"]
     tray.update_action("toggle_arrows", True)
     assert tray.toggle_actions["toggle_arrows"].isChecked()
+    assert tray.arrow_mode_actions[ArrowDisplayMode.NEARBY].isChecked()
+    tray.arrow_mode_actions[ArrowDisplayMode.ALL].trigger()
+    assert dispatched[-1] == "set_arrow_mode_all"
+    assert tray.arrow_mode_actions[ArrowDisplayMode.ALL].isChecked()
+    tray.update_arrow_mode(ArrowDisplayMode.NEARBY)
+    assert tray.arrow_mode_menu.title() == "Arrow range: Nearby threats"
     tray.update_snapshot(snapshot())
     assert "Tracking Aatrox" in tray.status_action.text()
     assert "waiting for live frames" in tray.analysis_action.text().lower()
@@ -429,8 +454,8 @@ def test_tray_updates_and_dispatches(qapp: Any) -> None:
     assert "dot fallback available" in tray.affinity_action.text()
     tray.update_affinity(AffinityResult(AffinityStatus.FAILED), capture_isolated=True)
     assert tray.affinity_action.text() == "Overlay capture: isolated (League window)"
-    assert tray.marker_style_actions[LastSeenMarkerStyle.PORTRAIT].isChecked()
-    assert not tray.marker_style_actions[LastSeenMarkerStyle.ROLE].isChecked()
+    assert not tray.marker_style_actions[LastSeenMarkerStyle.PORTRAIT].isChecked()
+    assert tray.marker_style_actions[LastSeenMarkerStyle.ROLE].isChecked()
     assert not tray.marker_style_actions[LastSeenMarkerStyle.DOT].isChecked()
     assert "red X" not in tray.marker_style_actions[LastSeenMarkerStyle.ROLE].toolTip()
     tray.marker_style_actions[LastSeenMarkerStyle.ROLE].trigger()
@@ -439,6 +464,9 @@ def test_tray_updates_and_dispatches(qapp: Any) -> None:
     tray.marker_style_actions[LastSeenMarkerStyle.DOT].trigger()
     assert dispatched[-1] == "set_marker_style_dot"
     assert tray.marker_style_actions[LastSeenMarkerStyle.DOT].isChecked()
+    assert (
+        tray.marker_style_menu.actions()[0] is tray.marker_style_actions[LastSeenMarkerStyle.ROLE]
+    )
     assert not tray.marker_style_actions[LastSeenMarkerStyle.PORTRAIT].isChecked()
     assert not tray.marker_style_actions[LastSeenMarkerStyle.ROLE].isChecked()
     tray.update_marker_style(LastSeenMarkerStyle.DOT)
@@ -446,6 +474,7 @@ def test_tray_updates_and_dispatches(qapp: Any) -> None:
     top_level = [action.text() for action in tray.menu.actions()]
     assert "Select minimap area..." in top_level
     assert "Direction arrows" in top_level
+    assert "Arrow range: Nearby threats" in top_level
     assert "Missing-enemy markers" in top_level
     assert "Missing marker: Minimal dot" in top_level
     assert "Pause detection" in top_level
@@ -477,6 +506,7 @@ def test_tray_respects_persisted_preferences_and_notifications(qapp: Any) -> Non
         lambda _name: None,
         TrackerConfig(
             show_arrows=False,
+            arrow_display_mode=ArrowDisplayMode.ALL,
             show_last_seen=False,
             last_seen_marker_style=LastSeenMarkerStyle.DOT,
             show_notifications=False,
@@ -485,6 +515,7 @@ def test_tray_respects_persisted_preferences_and_notifications(qapp: Any) -> Non
         ),
     )
     assert not tray.toggle_actions["toggle_arrows"].isChecked()
+    assert tray.arrow_mode_actions[ArrowDisplayMode.ALL].isChecked()
     assert not tray.toggle_actions["toggle_last_seen"].isChecked()
     assert tray.marker_style_actions[LastSeenMarkerStyle.DOT].isChecked()
     assert not tray.marker_style_actions[LastSeenMarkerStyle.PORTRAIT].isChecked()

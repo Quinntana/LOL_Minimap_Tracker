@@ -361,7 +361,7 @@ class LeagueWindowFrameSource:
                 if self._last_error is not None:
                     error = self._last_error
                     break
-                if self._latest is not None:
+                if self._latest is not None and self._sequence > self._delivered_sequence:
                     self._delivered_sequence = self._sequence
                     return self._latest.copy()
                 remaining = deadline - time.monotonic()
