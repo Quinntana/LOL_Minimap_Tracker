@@ -63,6 +63,10 @@ class TrackerConfig:
     show_last_seen: bool = True
     last_seen_marker_style: LastSeenMarkerStyle = LastSeenMarkerStyle.PORTRAIT
     show_notifications: bool = True
+    cooldown_tracker_enabled: bool = False
+    cooldown_panel_locked: bool = False
+    cooldown_panel_left: int | None = None
+    cooldown_panel_top: int | None = None
 
     def to_mapping(self) -> dict[str, Any]:
         data = asdict(self)
@@ -100,6 +104,18 @@ def _number(
         logger.warning("Invalid %s=%r; using %r", key, value, default)
         return default
     return type(default)(value)
+
+
+def _optional_integer(
+    values: dict[str, Any], key: str, default: int | None, logger: logging.Logger
+) -> int | None:
+    value = values.get(key, default)
+    if value is None:
+        return None
+    if not isinstance(value, int) or isinstance(value, bool):
+        logger.warning("Invalid %s=%r; using %r", key, value, default)
+        return default
+    return value
 
 
 def config_from_mapping(values: dict[str, Any], logger: logging.Logger) -> TrackerConfig:
@@ -230,6 +246,10 @@ def config_from_mapping(values: dict[str, Any], logger: logging.Logger) -> Track
         show_last_seen=_boolean(values, "show_last_seen", True, logger),
         last_seen_marker_style=marker_style,
         show_notifications=_boolean(values, "show_notifications", True, logger),
+        cooldown_tracker_enabled=_boolean(values, "cooldown_tracker_enabled", False, logger),
+        cooldown_panel_locked=_boolean(values, "cooldown_panel_locked", False, logger),
+        cooldown_panel_left=_optional_integer(values, "cooldown_panel_left", None, logger),
+        cooldown_panel_top=_optional_integer(values, "cooldown_panel_top", None, logger),
     )
 
 

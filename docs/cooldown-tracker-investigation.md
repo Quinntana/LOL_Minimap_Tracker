@@ -1,15 +1,17 @@
 # Enemy Cooldown Tracker Investigation
 
-## Decision
+## Private development scope
 
-Do not implement or distribute the proposed in-game enemy ultimate cooldown timer
-without written Riot approval.
+The timer is implemented only on the opt-in `feature/cooldown-tracker` development
+branch for a friend-hosted, non-commercial tournament and research playback data.
+It remains disabled by default and is not part of a public release.
 
 Riot's current Game Integrity policy explicitly prohibits products that provide
 information not present in the game client for a competitive edge and gives
 "automatically or manually allowing tracking enemy ultimate cooldowns" as its
 example. A user-clicked approximate timer is therefore still inside the stated
-prohibition. Enemy summoner-spell timers carry the same material policy risk.
+prohibition. Enemy summoner-spell timers carry the same material policy risk. Written
+Riot approval is still required before public distribution or broader live use.
 
 - Riot League of Legends developer policy:
   https://developer.riotgames.com/docs/lol#game-integrity
@@ -54,14 +56,14 @@ Only the general Data Dragon icon/static-data concept is worth retaining. The mi
 tracker's typed adapters, cached data client, injected monotonic clock, Qt event loop,
 and tested lifecycle are the appropriate foundation for any approved future work.
 
-## Compliant alternatives
+## Lower-risk alternatives
 
 - A pre-game static cooldown reference with no game-session timer state.
 - A replay/practice-tool review screen that is not used to provide live competitive
   information.
 - Self or allied-team cooldown information explicitly approved by Riot.
 
-## Design if Riot grants written approval
+## Implemented development design
 
 - Keep the controls in a separate interactive Qt panel; the minimap overlay must
   remain click-through.
@@ -76,3 +78,6 @@ and tested lifecycle are the appropriate foundation for any approved future work
 - Reset every timer on confirmed match end or roster/session replacement.
 - Test schema failures, offline cache fallback, nonstandard ultimate ranks,
   monotonic boundaries, session reset, and Qt mouse behavior with fixtures.
+- Record manual start/restart/cancel/ready/reset transitions to
+  `cooldown-events.csv` for research playback; participant keys are one-way hashed
+  rather than raw Riot IDs.

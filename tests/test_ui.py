@@ -449,6 +449,16 @@ def test_tray_updates_and_dispatches(qapp: Any) -> None:
     assert "Missing-enemy markers" in top_level
     assert "Missing marker: Minimal dot" in top_level
     assert "Pause detection" in top_level
+    assert "Private cooldown tracker" in top_level
+    tray.toggle_actions["toggle_cooldown_panel"].trigger()
+    assert dispatched[-1] == "toggle_cooldown_panel"
+    tray.toggle_actions["toggle_cooldown_panel_lock"].trigger()
+    assert dispatched[-1] == "toggle_cooldown_panel_lock"
+    clear_action = next(
+        action for action in tray.cooldown_menu.actions() if action.text() == "Clear all timers"
+    )
+    clear_action.trigger()
+    assert dispatched[-1] == "clear_cooldown_timers"
     assert "Save timeline" not in top_level
     save_action = next(
         action for action in tray.advanced_menu.actions() if action.text() == "Save timeline"
@@ -470,6 +480,8 @@ def test_tray_respects_persisted_preferences_and_notifications(qapp: Any) -> Non
             show_last_seen=False,
             last_seen_marker_style=LastSeenMarkerStyle.DOT,
             show_notifications=False,
+            cooldown_tracker_enabled=True,
+            cooldown_panel_locked=True,
         ),
     )
     assert not tray.toggle_actions["toggle_arrows"].isChecked()
@@ -478,6 +490,8 @@ def test_tray_respects_persisted_preferences_and_notifications(qapp: Any) -> Non
     assert not tray.marker_style_actions[LastSeenMarkerStyle.PORTRAIT].isChecked()
     assert not tray.marker_style_actions[LastSeenMarkerStyle.ROLE].isChecked()
     assert not tray.toggle_actions["toggle_notifications"].isChecked()
+    assert tray.toggle_actions["toggle_cooldown_panel"].isChecked()
+    assert tray.toggle_actions["toggle_cooldown_panel_lock"].isChecked()
 
 
 def test_region_selection_normalizes_virtual_desktop_coordinates() -> None:

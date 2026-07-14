@@ -77,6 +77,7 @@ def test_clock_logging_and_paths(tmp_path: Path, monkeypatch: Any) -> None:
     assert paths.log_dir.exists()
     assert paths.cache_dir.exists()
     assert paths.timeline_path.parent == paths.user_data_dir
+    assert paths.cooldown_events_path.parent == paths.user_data_dir
     assert paths.lock_path.parent == paths.user_data_dir
     assert paths.role_asset_dir.exists()
 

@@ -16,6 +16,7 @@ from lol_minimap_tracker.domain.models import (
     RosterMember,
     RosterResult,
     RosterStatus,
+    SummonerSpellRef,
     TrackerMode,
 )
 from lol_minimap_tracker.tracking.engine import FrameProcessingError, TrackerEngine
@@ -232,6 +233,140 @@ def test_new_roster_clears_old_positions_and_identity() -> None:
     assert replacement.identity.champion_name == "Nami"
     assert replacement.identity.role is Role.UTILITY
     assert replacement.position is None
+
+
+def test_level_role_and_order_updates_refresh_roster_without_new_generation() -> None:
+    flash = SummonerSpellRef("SummonerFlash", "Flash")
+    teleport = SummonerSpellRef("SummonerTeleport", "Teleport")
+    heal = SummonerSpellRef("SummonerHeal", "Heal")
+    initial_members = (
+        RosterMember(
+            "Aatrox",
+            Role.TOP,
+            participant_id="participant-a",
+            champion_id="Aatrox",
+            level=6,
+            summoner_spells=(flash, teleport),
+        ),
+        RosterMember(
+            "Nami",
+            Role.UTILITY,
+            participant_id="participant-b",
+            champion_id="Nami",
+            level=5,
+            summoner_spells=(flash, heal),
+        ),
+    )
+    refreshed_members = (
+        RosterMember(
+            "Nami",
+            Role.BOTTOM,
+            participant_id="participant-b",
+            champion_id="Nami",
+            level=7,
+            summoner_spells=(flash, heal),
+        ),
+        RosterMember(
+            "Aatrox",
+            Role.MIDDLE,
+            participant_id="participant-a",
+            champion_id="Aatrox",
+            level=11,
+            summoner_spells=(flash, teleport),
+        ),
+    )
+    engine, clock, _ = make_engine(
+        [
+            RosterResult(RosterStatus.ACTIVE, initial_members),
+            RosterResult(RosterStatus.ACTIVE, refreshed_members),
+        ]
+    )
+    engine.poll_roster()
+    clock.now = 0.1
+    engine.process_frame()
+    clock.now = 0.2
+    engine.process_frame()
+    assert next(
+        champion
+        for champion in engine.get_snapshot().champions
+        if champion.identity.champion_name == "Aatrox"
+    ).position == (12, 34)
+
+    engine.poll_roster()
+
+    state = engine.get_roster_state()
+    assert state.generation == 1
+    assert state.members == refreshed_members
+    aatrox = next(
+        champion
+        for champion in engine.get_snapshot().champions
+        if champion.identity.champion_name == "Aatrox"
+    )
+    assert aatrox.identity.role is Role.MIDDLE
+    assert aatrox.position == (12, 34)
+
+
+def test_spell_refresh_preserves_state_but_participant_replacement_resets_generation() -> None:
+    flash = SummonerSpellRef("SummonerFlash", "Flash")
+    teleport = SummonerSpellRef("SummonerTeleport", "Teleport")
+    barrier = SummonerSpellRef("SummonerBarrier", "Barrier")
+
+    def roster(participant: str, second_spell: SummonerSpellRef) -> RosterResult:
+        return RosterResult(
+            RosterStatus.ACTIVE,
+            (
+                RosterMember(
+                    "Aatrox",
+                    Role.TOP,
+                    participant_id=participant,
+                    champion_id="Aatrox",
+                    level=6,
+                    summoner_spells=(flash, second_spell),
+                ),
+            ),
+        )
+
+    engine, clock, _ = make_engine(
+        [
+            roster("participant-a", teleport),
+            roster("participant-a", barrier),
+            roster("participant-b", barrier),
+        ]
+    )
+    engine.poll_roster()
+    clock.now = 0.1
+    engine.process_frame()
+    clock.now = 0.2
+    engine.process_frame()
+    assert engine.get_snapshot().champions[0].position == (12, 34)
+
+    engine.poll_roster()
+    assert engine.get_roster_state().generation == 1
+    assert engine.get_snapshot().champions[0].position == (12, 34)
+    assert engine.get_roster_state().members[0].summoner_spells == (flash, barrier)
+
+    engine.poll_roster()
+    assert engine.get_roster_state().generation == 2
+    assert engine.get_roster_state().members[0].participant_id == "participant-b"
+
+
+def test_confirmed_match_clear_removes_members_and_advances_generation_once() -> None:
+    unavailable = RosterResult(RosterStatus.UNAVAILABLE, error="no game")
+    engine, _, _ = make_engine([active(), unavailable, unavailable, unavailable, unavailable])
+    engine.poll_roster()
+    assert engine.get_roster_state().generation == 1
+    assert engine.get_roster_state().members
+
+    engine.poll_roster()
+    engine.poll_roster()
+    engine.poll_roster()
+
+    cleared = engine.get_roster_state()
+    assert cleared.generation == 2
+    assert cleared.members == ()
+
+    engine.poll_roster()
+    assert engine.get_roster_state().generation == 2
 
 
 def test_unknown_detection_is_ignored() -> None:

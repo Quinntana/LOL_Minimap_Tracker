@@ -57,6 +57,10 @@ def test_config_rejects_invalid_values(caplog: object) -> None:
             "show_last_seen": "yes",
             "last_seen_marker_style": "sparkle",
             "show_notifications": None,
+            "cooldown_tracker_enabled": "yes",
+            "cooldown_panel_locked": 1,
+            "cooldown_panel_left": 12.5,
+            "cooldown_panel_top": False,
         },
         logging.getLogger("test"),
     )
@@ -91,6 +95,10 @@ def test_config_rejects_invalid_values(caplog: object) -> None:
     assert config.show_last_seen is True
     assert config.last_seen_marker_style is LastSeenMarkerStyle.PORTRAIT
     assert config.show_notifications is True
+    assert config.cooldown_tracker_enabled is False
+    assert config.cooldown_panel_locked is False
+    assert config.cooldown_panel_left is None
+    assert config.cooldown_panel_top is None
 
 
 def test_legacy_json_is_read_without_rewrite(tmp_path: Path, caplog: object) -> None:
@@ -167,10 +175,17 @@ def test_default_config_bootstrap_and_preference_round_trip(tmp_path: Path) -> N
         show_last_seen=False,
         last_seen_marker_style=LastSeenMarkerStyle.ROLE,
         show_notifications=False,
+        cooldown_tracker_enabled=True,
+        cooldown_panel_locked=True,
+        cooldown_panel_left=-1700,
+        cooldown_panel_top=240,
     )
     assert save_config(path, updated, logger)
     assert load_config(path, logger) == updated
     assert json.loads(path.read_text(encoding="utf-8"))["last_seen_marker_style"] == "role"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["cooldown_tracker_enabled"] is True
+    assert payload["cooldown_panel_left"] == -1700
 
 
 def test_failed_atomic_save_preserves_existing_config(tmp_path: Path, monkeypatch: Any) -> None:

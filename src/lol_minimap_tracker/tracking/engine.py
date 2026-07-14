@@ -27,6 +27,7 @@ from ..domain.models import (
     DetectionFrame,
     EnemyIdentity,
     RosterMember,
+    RosterState,
     RosterStatus,
     RuntimeHealth,
     TrackerMode,
@@ -75,7 +76,9 @@ class TrackerEngine:
         self._timeline_enabled = False
         self._roster_status = RosterStatus.UNAVAILABLE
         self._identities: tuple[EnemyIdentity, ...] = ()
-        self._roster_signature: tuple[tuple[str, str], ...] = ()
+        self._roster_signature: tuple[tuple[str, ...], ...] = ()
+        self._roster_generation = 0
+        self._roster_members: tuple[RosterMember, ...] = ()
         self._portraits: Mapping[str, Image] = {}
         self._positions: dict[str, tuple[int, int]] = {}
         self._last_seen: dict[str, float] = {}
@@ -101,14 +104,22 @@ class TrackerEngine:
         self._next_capture_recovery = 0.0
 
     @staticmethod
-    def _signature(members: tuple[RosterMember, ...]) -> tuple[tuple[str, str], ...]:
-        return tuple(
-            sorted((member.champion_name.casefold(), member.role.value) for member in members)
-        )
+    def _signature(members: tuple[RosterMember, ...]) -> tuple[tuple[str, ...], ...]:
+        signature: list[tuple[str, ...]] = []
+        for member in members:
+            signature.append(
+                (
+                    member.participant_id.casefold(),
+                    (member.champion_id or member.champion_name).casefold(),
+                    member.champion_name.casefold(),
+                )
+            )
+        return tuple(sorted(signature))
 
     def _clear_match(self) -> None:
         self._identities = ()
         self._roster_signature = ()
+        self._roster_members = ()
         self._portraits = {}
         self._positions.clear()
         self._last_seen.clear()
@@ -132,12 +143,16 @@ class TrackerEngine:
         result = self.roster_provider.poll()
         if result.status is RosterStatus.ACTIVE:
             signature = self._signature(result.members)
-            if signature != self._roster_signature:
+            with self._lock:
+                roster_changed = signature != self._roster_signature
+            if roster_changed:
                 identities = assign_identities(result.members)
                 portraits = self.portrait_provider.get_portraits(result.members)
                 with self._lock:
                     self._clear_match()
+                    self._roster_generation += 1
                     self._roster_signature = signature
+                    self._roster_members = result.members
                     self._identities = identities
                     self._portraits = portraits
                     self._message = "Tracking " + ", ".join(
@@ -146,6 +161,8 @@ class TrackerEngine:
                 self.logger.info(self._message)
             else:
                 with self._lock:
+                    self._roster_members = result.members
+                    self._identities = assign_identities(result.members)
                     missing = tuple(
                         member
                         for member in result.members
@@ -176,6 +193,7 @@ class TrackerEngine:
                     "Live Client unavailable for %s polls; clearing match", self._missing_polls
                 )
                 self._clear_match()
+                self._roster_generation += 1
             else:
                 self._message = (
                     f"Live Client unavailable ({self._missing_polls}/"
@@ -294,6 +312,14 @@ class TrackerEngine:
         """Return a thread-safe shallow copy for read-only overlay rendering."""
         with self._lock:
             return dict(self._portraits)
+
+    def get_roster_state(self) -> RosterState:
+        """Return the latest privacy-safe Live Client roster under the engine lock."""
+        with self._lock:
+            return RosterState(
+                generation=self._roster_generation,
+                members=self._roster_members,
+            )
 
     def _required_confirmation_frames(
         self, champion_name: str, position: tuple[int, int], now: float

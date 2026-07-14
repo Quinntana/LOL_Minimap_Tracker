@@ -54,6 +54,10 @@ class AppPaths:
         return self.user_data_dir / "timeline.csv"
 
     @property
+    def cooldown_events_path(self) -> Path:
+        return self.user_data_dir / "cooldown-events.csv"
+
+    @property
     def lock_path(self) -> Path:
         return self.user_data_dir / "tracker.lock"
 

@@ -58,6 +58,24 @@ The confidence, movement, health, and recovery values are configurable in
 - `max_position_jump_pixels` and `max_position_speed_pixels_per_second`: movement gate.
 - `health_stale_after_seconds`: delayed-frame warning threshold.
 - `capture_recovery_failure_count` and `capture_recovery_backoff_seconds`: MSS recovery.
+- `cooldown_tracker_enabled`: opt-in private clickable base-cooldown panel; disabled
+  by default.
+
+## Private cooldown research panel
+
+The development-only cooldown panel is a separate compact, interactive window; the
+minimap overlay remains fully click-through. It displays each enemy champion,
+ultimate, and two summoner-spell icons. Left-click starts or restarts a timer and
+right-click clears it. Enemy level selects the ordinary ultimate rank at levels
+6/11/16, with explicit handling for supported nonstandard rank layouts. Summoner
+spells use their patch-static base cooldown.
+
+These timers are deliberately approximate. They ignore ability and summoner haste,
+runes, items, resets, refunds, charges, and mode-specific modifiers. Unknown,
+zero-cooldown, non-inferable, and charge-based entries such as Smite are disabled
+instead of guessed. Manual transitions are recorded in `cooldown-events.csv` for
+research playback. The panel is disabled by default and intended only for the private
+development scope documented in `docs/cooldown-tracker-investigation.md`.
 
 The default `league_window` backend uses Windows Graphics Capture to target the
 visible window owned by `League of Legends.exe`. Only that game window is captured,
@@ -140,6 +158,7 @@ Runtime data is written to `%LOCALAPPDATA%\LoLMinimapTracker`:
 - `logs/tracker.log`: rotating diagnostics.
 - `cache/ddragon`: versioned metadata and champion portraits.
 - `timeline.csv`: explicitly recorded movement data.
+- `cooldown-events.csv`: manually clicked cooldown transitions for research playback.
 - `tracker.lock`: user-level single-instance lock.
 
 Global hotkeys are enabled by default and never request administrator access. The

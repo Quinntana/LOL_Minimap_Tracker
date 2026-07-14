@@ -35,6 +35,9 @@ jobs:
         run: |
           $archive = pyi-archive_viewer -l -r dist/LoLMinimapTracker.exe
           $archiveText = $archive -join [Environment]::NewLine
-          foreach ($required in @("lol_minimap_tracker.app", "QtSvg.pyd", "cv2.pyd", "mss.windows", "skimage.metrics._structural_similarity", "position-top.svg")) {
+          foreach ($required in @("lol_minimap_tracker.app", "lol_minimap_tracker.domain.cooldowns", "lol_minimap_tracker.integrations.cooldown_data", "lol_minimap_tracker.integrations.cooldown_events", "lol_minimap_tracker.ui.cooldown_panel", "QtSvg.pyd", "cv2.pyd", "mss.windows", "windows_capture\\windows_capture.pyd", "position-top.svg")) {
             if ($archiveText -notmatch [regex]::Escape($required)) { throw "Missing $required" }
+          }
+          foreach ($forbidden in @("'imageio", "'PIL", "'scipy", "'skimage", "'tifffile")) {
+            if ($archiveText -match [regex]::Escape($forbidden)) { throw "Unexpected $($forbidden.Trim("'"))" }
           }

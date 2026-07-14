@@ -64,9 +64,25 @@ class AnalysisStatus(StrEnum):
 
 
 @dataclass(frozen=True)
+class SummonerSpellRef:
+    identifier: str | None
+    display_name: str
+
+
+@dataclass(frozen=True)
 class RosterMember:
     champion_name: str
     role: Role
+    participant_id: str = ""
+    champion_id: str | None = None
+    level: int | None = None
+    summoner_spells: tuple[SummonerSpellRef, ...] = ()
+
+
+@dataclass(frozen=True)
+class RosterState:
+    generation: int = 0
+    members: tuple[RosterMember, ...] = ()
 
 
 @dataclass(frozen=True)

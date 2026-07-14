@@ -6,6 +6,7 @@ import logging
 import os
 import sys
 import threading
+import uuid
 from dataclasses import asdict, replace
 from typing import Any
 
@@ -14,11 +15,14 @@ from PyQt5.QtGui import QIcon
 from PyQt5.QtWidgets import QApplication, QSystemTrayIcon
 
 from .config import CaptureRegion, TrackerConfig, ensure_config, load_config, save_config
+from .domain.cooldowns import CooldownTimerStore
 from .domain.models import AffinityResult, AffinityStatus, LastSeenMarkerStyle
 from .integrations.affinity import WindowsDisplayAffinityController
 from .integrations.capture import LeagueWindowFrameSource, MssFrameSource
 from .integrations.clickthrough import WindowsOverlayInputController
 from .integrations.clock import SystemClock
+from .integrations.cooldown_data import CooldownDataDragonClient
+from .integrations.cooldown_events import CsvCooldownEventSink
 from .integrations.data_dragon import DataDragonClient
 from .integrations.hotkeys import KeyboardHotkeyService
 from .integrations.league_window import LeagueWindowFinder, enable_process_dpi_awareness
@@ -29,6 +33,7 @@ from .paths import AppPaths
 from .tracking.detector import OpenCvChampionDetector
 from .tracking.engine import TrackerEngine
 from .ui.calibration import CalibrationController, RegionSelector
+from .ui.cooldown_panel import CooldownPanel
 from .ui.overlay import TransparentOverlay
 from .ui.role_icons import RoleIconRenderer
 from .ui.tray import ActionBridge, TrayController
@@ -78,6 +83,7 @@ def run() -> int:
     else:
         frame_source = MssFrameSource(config.capture)
         logger.warning("Capture backend: composed desktop region (explicit fallback)")
+    clock = SystemClock()
     engine = TrackerEngine(
         config=config,
         roster_provider=live_client,
@@ -85,7 +91,7 @@ def run() -> int:
         frame_source=frame_source,
         detector=OpenCvChampionDetector(config, logger.getChild("detector")),
         timeline_sink=CsvTimelineSink(paths.timeline_path),
-        clock=SystemClock(),
+        clock=clock,
         logger=logger.getChild("engine"),
     )
 
@@ -152,6 +158,26 @@ def run() -> int:
         input_controller=WindowsOverlayInputController(),
         input_changed=input_changed,
     )
+    cooldown_events = CsvCooldownEventSink(paths.cooldown_events_path)
+    cooldown_store = CooldownTimerStore(clock, cooldown_events)
+    cooldown_catalog = CooldownDataDragonClient(
+        paths.cache_dir,
+        logger.getChild("cooldown_data"),
+    )
+    cooldown_panel = CooldownPanel(
+        roster_provider=engine.get_roster_state,
+        catalog=cooldown_catalog,
+        timer_store=cooldown_store,
+        affinity_controller=WindowsDisplayAffinityController(),
+        logger=logger.getChild("cooldown_panel"),
+        capture_isolated=lambda: frame_source.isolates_overlay,
+        exclude_from_capture=config.exclude_overlay_from_capture,
+        enabled=config.cooldown_tracker_enabled,
+        locked=config.cooldown_panel_locked,
+        left=config.cooldown_panel_left,
+        top=config.cooldown_panel_top,
+        session_prefix=uuid.uuid4().hex[:12],
+    )
     selector = RegionSelector()
 
     def persist(next_config: TrackerConfig) -> bool:
@@ -197,6 +223,67 @@ def run() -> int:
         state = not config_state.show_notifications
         persist(replace(config_state, show_notifications=state))
         return state
+
+    def set_cooldown_panel_visible(visible: bool) -> bool:
+        state = cooldown_panel.set_panel_visible(visible)
+        persist(replace(config_state, cooldown_tracker_enabled=state))
+        if tray is not None:
+            tray.update_action("toggle_cooldown_panel", state)
+            if state:
+                tray.notify(
+                    "Private base-cooldown panel",
+                    "Left-click starts or restarts; right-click clears. Timers are approximate: "
+                    "ability haste, runes and items are ignored.",
+                    QSystemTrayIcon.Information,
+                )
+        return state
+
+    def toggle_cooldown_panel() -> bool:
+        return set_cooldown_panel_visible(not config_state.cooldown_tracker_enabled)
+
+    def set_cooldown_panel_locked(locked: bool) -> bool:
+        state = cooldown_panel.set_locked(locked)
+        persist(replace(config_state, cooldown_panel_locked=state))
+        if tray is not None:
+            tray.update_action("toggle_cooldown_panel_lock", state)
+        return state
+
+    def toggle_cooldown_panel_lock() -> bool:
+        return set_cooldown_panel_locked(not config_state.cooldown_panel_locked)
+
+    def save_cooldown_panel_position(value: object) -> None:
+        if (
+            not isinstance(value, tuple)
+            or len(value) != 2
+            or not all(isinstance(coordinate, int) for coordinate in value)
+        ):
+            logger.error("Cooldown panel returned an invalid position: %r", value)
+            return
+        left, top = value
+        persist(replace(config_state, cooldown_panel_left=left, cooldown_panel_top=top))
+
+    def cooldown_panel_blocked(status: str) -> None:
+        persist(replace(config_state, cooldown_tracker_enabled=False))
+        if tray is not None:
+            tray.update_action("toggle_cooldown_panel", False)
+            tray.notify(
+                "Cooldown panel hidden",
+                "Desktop capture could not exclude the interactive panel "
+                f"({status}). League-window capture remains the safe mode.",
+                QSystemTrayIcon.Warning,
+                force=True,
+            )
+
+    def request_cooldown_panel_visibility(visible: bool) -> None:
+        set_cooldown_panel_visible(visible)
+
+    def request_cooldown_panel_lock(locked: bool) -> None:
+        set_cooldown_panel_locked(locked)
+
+    cooldown_panel.visibility_requested.connect(request_cooldown_panel_visibility)
+    cooldown_panel.lock_requested.connect(request_cooldown_panel_lock)
+    cooldown_panel.position_changed.connect(save_cooldown_panel_position)
+    cooldown_panel.safety_blocked.connect(cooldown_panel_blocked)
 
     def open_configuration() -> None:
         if not paths.config_write_path.exists() and not save_config(
@@ -261,6 +348,9 @@ def run() -> int:
         "set_marker_style_dot": lambda: set_last_seen_marker_style(LastSeenMarkerStyle.DOT),
         "toggle_notifications": toggle_notifications,
         "toggle_timeline_logging": engine.toggle_timeline_logging,
+        "toggle_cooldown_panel": toggle_cooldown_panel,
+        "toggle_cooldown_panel_lock": toggle_cooldown_panel_lock,
+        "clear_cooldown_timers": cooldown_panel.clear_timers,
         "open_configuration": open_configuration,
         "open_data_folder": lambda: os.startfile(paths.user_data_dir),
         "select_minimap": calibration.start,
@@ -331,6 +421,17 @@ def run() -> int:
         status_timer.timeout.connect(update_status)
         status_timer.start(500)
 
+    cooldown_flush_timer = QTimer()
+
+    def flush_cooldown_events() -> None:
+        try:
+            cooldown_events.flush()
+        except OSError:
+            logger.exception("Could not flush cooldown research events")
+
+    cooldown_flush_timer.timeout.connect(flush_cooldown_events)
+    cooldown_flush_timer.start(5000)
+
     cleanup_started = False
 
     def cleanup() -> None:
@@ -339,6 +440,8 @@ def run() -> int:
             return
         cleanup_started = True
         selector.close()
+        cooldown_panel.shutdown()
+        cooldown_store.clear_all()
         engine.stop()
         hotkeys.stop()
         tracker_thread.join(timeout=2.0)
@@ -346,10 +449,13 @@ def run() -> int:
             engine.flush_timeline()
         except OSError:
             logger.exception("Could not flush timeline during shutdown")
+        flush_cooldown_events()
         instance_lock.unlock()
 
     app.aboutToQuit.connect(cleanup)
     overlay.show()
+    if config.cooldown_tracker_enabled:
+        cooldown_panel.show()
     logger.info("Application started")
     exit_code = app.exec_()
     cleanup()

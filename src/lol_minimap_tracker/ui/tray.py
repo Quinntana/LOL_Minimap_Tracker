@@ -101,6 +101,33 @@ class TrayController:
         self.update_marker_style(config.last_seen_marker_style)
         self._add_toggle(self.menu, "Pause detection", "pause", False, dispatch)
 
+        self.cooldown_menu = cast(QMenu, self.menu.addMenu("Private cooldown tracker"))
+        self.cooldown_menu.setToolTipsVisible(True)
+        show_cooldowns = self._add_toggle(
+            self.cooldown_menu,
+            "Show clickable panel",
+            "toggle_cooldown_panel",
+            config.cooldown_tracker_enabled,
+            dispatch,
+        )
+        show_cooldowns.setToolTip(
+            "Manual approximate base-cooldown timers for private development use only."
+        )
+        lock_cooldowns = self._add_toggle(
+            self.cooldown_menu,
+            "Lock panel position",
+            "toggle_cooldown_panel_lock",
+            config.cooldown_panel_locked,
+            dispatch,
+        )
+        lock_cooldowns.setToolTip("Keeps the panel in place; timer icons remain clickable.")
+        self._add_command(
+            self.cooldown_menu,
+            "Clear all timers",
+            "clear_cooldown_timers",
+            dispatch,
+        )
+
         self.advanced_menu = self.menu.addMenu("Advanced")
         assert self.advanced_menu is not None
         self._add_toggle(
@@ -140,13 +167,14 @@ class TrayController:
         name: str,
         checked: bool,
         dispatch: Callable[[str], None],
-    ) -> None:
+    ) -> QAction:
         action = QAction(label, menu)
         action.setCheckable(True)
         action.setChecked(checked)
         action.triggered.connect(lambda _checked=False, key=name: dispatch(key))
         menu.addAction(action)
         self.toggle_actions[name] = action
+        return action
 
     def _add_marker_style(
         self,
